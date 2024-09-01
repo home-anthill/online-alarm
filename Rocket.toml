@@ -1,11 +1,15 @@
 [default]
 
 [debug]
+# generated via `openssl rand -base64 32`
+# this is only a placeholder, don't use it in production
 secret_key="3O46i/aNZk9/h2YMgoVwEobGUlKDVt1u/tA0rBJN3KM="
 
 [release]
 address = "0.0.0.0"
 port = 80
 # required by rocket with '--release' to encrypt private cookies
-# check https://rocket.rs/v0.5-rc/guide/configuration/#secret-key
+# check https://rocket.rs/v0.5/guide/configuration/#secret-key
+# generated via `openssl rand -base64 32`
+# this is only a placeholder, don't use it in production
 secret_key="fwVuHbHBMm4HKdoP3lSodsXsUYUYawqfD9emyTNnWJo="
