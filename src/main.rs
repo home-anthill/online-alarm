@@ -1,12 +1,17 @@
-use log::{debug, error, info, warn};
+#[macro_use]
+extern crate rocket;
+
+use log::{error, info};
 use mongodb::Database;
 
+use online::catchers;
 use online::config::{init, Env};
 use online::db::connect;
 use online::db::online::find_all_online;
+use online::routes;
 
-#[tokio::main]
-async fn main() {
+#[rocket::main]
+async fn main() -> Result<(), rocket::Error> {
     // 1. Init logger and env
     let env: Env = init();
 
@@ -25,14 +30,29 @@ async fn main() {
                     for result in results.iter() {
                         info!(target: "app", "iterating result = {:?}", &result);
                     }
-                },
+                }
                 Err(err) => error!(target: "app", "err = {:?}", err),
             }
             tokio::time::sleep(std::time::Duration::from_secs(10)).await;
         }
     });
 
-    loop {
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
+    // 4. Init Rocket
+    // a) define APIs
+    // b) define error handlers
+    info!(target: "app", "Starting Rocket...");
+    let _rocket = rocket::build()
+        .mount("/", routes![routes::api::keep_alive])
+        .register(
+            "/",
+            catchers![
+                catchers::bad_request,
+                catchers::not_found,
+                catchers::internal_server_error,
+            ],
+        )
+        .launch()
+        .await?;
+
+    Ok(())
 }

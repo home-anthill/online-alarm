@@ -28,25 +28,27 @@ pub async fn find_online_by_uuid(db: &Database, uuid: &str) -> Result<Document, 
 
 pub async fn find_all_online(db: &Database) -> Result<Vec<OnlineDocument>, DbError> {
     info!(target: "app", "find_online - To get all online elements from db");
-    let pipeline = vec![
-        doc! {
-          "$match": {
-            "$expr": {
-              "$lt": [
-                "$modifiedAt",
-                {
-                  "$dateSubtract": {
-                    "startDate": "$$NOW",
-                    "unit": "second",
-                    "amount": 60
-                  }
-                }
-              ]
-            }
-          }
+    let pipeline = vec![doc! {
+       "$match": {
+         "$expr": {
+           "$lt": [
+             "$modifiedAt",
+             {
+               "$dateSubtract": {
+                 "startDate": "$$NOW",
+                 "unit": "second",
+                 "amount": 60
+               }
+             }
+           ]
+         }
        }
-    ];
-    let results = db.collection::<OnlineDocument>("online").aggregate(pipeline).await.unwrap();
+    }];
+    let results = db
+        .collection::<OnlineDocument>("online")
+        .aggregate(pipeline)
+        .await
+        .unwrap();
     // to use try_collect you have to use 'futures::stream::TryStreamExt' on top
     let vec_cursor = results.try_collect().await.unwrap_or_else(|_| vec![]);
     let new_bills: Vec<OnlineDocument> = vec_cursor
@@ -55,7 +57,6 @@ pub async fn find_all_online(db: &Database) -> Result<Vec<OnlineDocument>, DbErr
         .collect();
     Ok(new_bills)
 }
-
 
 // async fn get_list_as_vec<T>(db: &Database, collection_name: &str, filter: Document) -> Vec<T>
 // where
