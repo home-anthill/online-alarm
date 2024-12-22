@@ -21,7 +21,7 @@ GitHub releases [HERE](https://github.com/home-anthill/online-alarm/releases)
 
 Versions:
 
-- ??/09/2024 - 1.0.0
+- ??/12/2024 - 1.0.0
 
 
 ## :sparkling_heart: A big thank you to :sparkling_heart:

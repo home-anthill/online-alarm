@@ -1,11 +1,11 @@
-use dotenvy::dotenv;
 use log::info;
+
+use dotenvy::dotenv;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug)]
 pub struct Env {
-    pub mongo_uri: String,
-    pub mongo_db_name: String,
+    pub redis_uri: String,
 }
 
 pub fn init() -> Env {
@@ -21,9 +21,7 @@ pub fn init() -> Env {
 }
 
 fn print_env(env: &Env) {
-    let mongo_uri = env.mongo_uri.clone();
-    let mongo_db_name = env.mongo_db_name.clone();
+    let redis_uri = env.redis_uri.clone();
     info!(target: "app", "env = {:?}", env);
-    info!(target: "app", "mongo_uri = {}", mongo_uri);
-    info!(target: "app", "mongo_db_name = {}", mongo_db_name);
+    info!(target: "app", "redis_uri = {}", redis_uri);
 }
