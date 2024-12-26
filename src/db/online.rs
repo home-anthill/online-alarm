@@ -1,48 +1,80 @@
-use log::info;
+use log::{error, debug};
 use std::collections::HashMap;
+use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use redis::{aio::MultiplexedConnection, AsyncCommands};
 
+use crate::errors::db_error::DbError;
 use crate::models::online::Online;
 
-pub async fn find_all_online(con: &MultiplexedConnection) -> Vec<Online> {
-    info!(target: "app", "find_all_online - To get all online elements from db");
-    let mut con = con.clone();
+pub async fn find_all_offline(db: &MultiplexedConnection) -> Vec<Online> {
+    debug!(target: "app", "find_all_offline - To get all online elements from db");
+    let mut con = db.clone();
 
     let mut not_online_devices: Vec<Online> = vec![];
 
     // get all keys with format 'online-<uuid>'
-    let values = con.scan_match::<&str, String>("online-*").await.unwrap();
-    let keys: Vec<String> = values.collect().await;
+    let db_keys: Vec<String> = con
+        .scan_match::<&str, String>(get_all_keys_pattern().as_str())
+        .await
+        .unwrap()
+        .collect()
+        .await;
 
-    for key in keys {
+    for db_key in db_keys {
         // hgetall returns the entire redis hash table (with all "key: value")
-        let value: HashMap<String, u64> = con.hgetall(&key).await.unwrap();
-        let online: u64 = match value.get("online") {
-            Some(val) => *val,
-            None => 0u64,
+        let value: HashMap<String, String> = con.hgetall(&db_key).await.unwrap();
+        let api_token: Result<&str, DbError> = match &value.get("apiToken") {
+            Some(val) => Ok(val),
+            None => Err(DbError::DbNotFound),
         };
-        let created_at: u64 = match value.get("createdAt") {
-            Some(val) => *val,
-            None => 0u64,
+        let fcm_token: Result<&str, DbError> = match &value.get("fcmToken") {
+            Some(val) => Ok(val),
+            None => Ok(""),
         };
-        let modified_at: u64 = match value.get("modifiedAt") {
-            Some(val) => *val,
-            None => 0u64,
+        let created_at: Result<u128, DbError> = match &value.get("createdAt") {
+            Some(val) => match val.parse::<u128>() {
+                Ok(val) => Ok(val),
+                Err(_) => Err(DbError::DbStrToNumError),
+            },
+            None => Ok(0u128),
+        };
+        let modified_at: Result<u128, DbError> = match &value.get("modifiedAt") {
+            Some(val) => match val.parse::<u128>() {
+                Ok(val) => Ok(val),
+                Err(_) => Err(DbError::DbStrToNumError),
+            },
+            None => Ok(0u128),
         };
 
-        let curr_date = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-        if modified_at < (curr_date - 60) {
+        if api_token.is_err() {
+            error!(target: "app", "REST - GET - find_all_offline - apiToken is missing");
+            continue;
+        }
+        if created_at.is_err() || modified_at.is_err() {
+            error!(target: "app", "REST - GET - find_all_offline - cannot parse dates");
+            continue;
+        }
+
+        let curr_date: u128 = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+        let mod_date: u128 = modified_at.unwrap();
+        if mod_date < (curr_date - (60 * 1000)) {
             let online: Online = Online {
-                uuid: key,
-                createdAt: created_at,
-                modifiedAt: modified_at,
-                online: online == 1,
+                uuid: db_key,
+                apiToken: api_token.unwrap().to_string(),
+                fcmToken: fcm_token.unwrap().to_string(),
+                createdAt: created_at.unwrap().to_string(),
+                modifiedAt: mod_date.to_string(),
             };
             not_online_devices.push(online);
         }
     }
     not_online_devices
+}
+
+pub fn get_all_keys_pattern() -> String {
+    let env = env::var("ENV").ok().unwrap_or("".to_string());
+    (if env == "testing" { "test-*" } else { "online-*" }).to_owned()
 }

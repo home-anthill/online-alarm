@@ -46,6 +46,7 @@ WORKDIR /app
 # - environment file
 COPY --from=builder /app/log4rs.yaml log4rs.yaml
 COPY --from=builder /app/.env_template /.env
+COPY --from=builder /app/serviceAccountKey.json_template /serviceAccountKey.json
 COPY --from=builder /app/target/release/online online
 
 ENTRYPOINT ["./online"]

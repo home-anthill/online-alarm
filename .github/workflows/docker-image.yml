@@ -62,6 +62,7 @@ jobs:
       - name: Run tests
         run: |
           cp .env_template .env
+          cp serviceAccountKey.json_template serviceAccountKey.json
           echo "Installing dependencies"
           make deps-ci
           echo "Running tests"

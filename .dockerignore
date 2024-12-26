@@ -6,4 +6,5 @@ logs
 .dockerignore
 Dockerfile
 .env
+serviceAccountKey.json
 coverage
