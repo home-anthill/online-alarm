@@ -31,3 +31,12 @@ pub fn internal_server_error(_: &Request) -> ApiError {
         message: "Internal server error".to_string(),
     }
 }
+
+#[catch(503)]
+pub fn service_unavailable(_: &Request) -> ApiError {
+    error!(target: "app", "catcher 503 - service_unavailable");
+    ApiError {
+        code: Status::ServiceUnavailable.code,
+        message: "Service Unavailable".to_string(),
+    }
+}

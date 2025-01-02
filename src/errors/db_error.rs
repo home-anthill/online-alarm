@@ -7,4 +7,6 @@ pub enum DbError {
     DbNotFound,
     #[error("Cannot parse string to numeric value")]
     DbStrToNumError,
+    #[error("Unknown field name")]
+    UnknownFieldNameError,
 }
