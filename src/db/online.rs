@@ -75,7 +75,7 @@ pub fn get_all_keys_pattern() -> String {
 }
 
 pub fn get_date_field_by_name(value: &HashMap<String, String>, field_name: &str) -> Result<u128, DbError> {
-    if field_name != "createdAt" || field_name != "modifiedAt" {
+    if field_name != "createdAt" && field_name != "modifiedAt" {
         return Err(DbError::UnknownFieldNameError);
     }
     let date: Result<u128, DbError> = match value.get(field_name) {
