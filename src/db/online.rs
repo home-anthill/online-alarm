@@ -1,31 +1,37 @@
-use log::{error, debug};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
-use redis::{aio::MultiplexedConnection, AsyncCommands};
+use redis::{aio::ConnectionManager, AsyncCommands, AsyncIter, RedisResult};
 
 use crate::errors::db_error::DbError;
+use crate::errors::redis_error::RedisError;
 use crate::models::online::Online;
 
-pub async fn find_all_offline(db: &MultiplexedConnection) -> Vec<Online> {
-    debug!(target: "app", "find_all_offline - To get all online elements from db");
+pub async fn find_all_offline(db: &ConnectionManager) -> Result<Vec<Online>, anyhow::Error> {
+    debug!(target: "app", "find_all_offline - to get all online elements from db");
     let mut con = db.clone();
 
     let mut not_online_devices: Vec<Online> = vec![];
 
     // get all keys with format 'online-<uuid>'
-    let db_keys: Vec<String> = con
-        .scan_match::<&str, String>(get_all_keys_pattern().as_str())
-        .await
-        .unwrap()
-        .collect()
-        .await;
+    let db_keys_iter_res: RedisResult<AsyncIter<String>> =
+        con.scan_match::<&str, String>(get_all_keys_pattern().as_str()).await;
+    if db_keys_iter_res.is_err() {
+        return Err(anyhow::Error::from(RedisError::GetKeysError));
+    }
+    let db_keys: Vec<String> = db_keys_iter_res.unwrap().collect().await;
 
     for db_key in db_keys {
         // hgetall returns the entire redis hash table (with all "key: value")
-        let value: HashMap<String, String> = con.hgetall(&db_key).await.unwrap();
+        let value_res: RedisResult<HashMap<String, String>> = con.hgetall(&db_key).await;
+        if value_res.is_err() {
+            return Err(anyhow::Error::from(RedisError::HGetAllError));
+        }
+        let value: HashMap<String, String> = value_res.unwrap();
+
         let api_token: Result<&str, DbError> = match &value.get("apiToken") {
             Some(val) => Ok(val),
             None => Err(DbError::DbNotFound),
@@ -71,7 +77,7 @@ pub async fn find_all_offline(db: &MultiplexedConnection) -> Vec<Online> {
             not_online_devices.push(online);
         }
     }
-    not_online_devices
+    Ok(not_online_devices)
 }
 
 pub fn get_all_keys_pattern() -> String {

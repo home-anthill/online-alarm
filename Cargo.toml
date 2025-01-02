@@ -20,6 +20,7 @@ panic = "abort"
 
 [dependencies]
 thiserror = "2.0.9"
+anyhow = "1.0.94"
 rocket = { version = "0.5.1", features = ["uuid", "secrets", "json"] }
 tokio = { version = "^1.42.0", features = ["full"] }
 redis = { version = "^0.27.6", features = ["tokio-comp", "connection-manager", "aio", "ahash", "r2d2"] }

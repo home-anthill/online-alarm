@@ -1,20 +1,19 @@
 #[macro_use]
 extern crate rocket;
 
-use log::{debug, info};
+use log::{debug, error, info};
 use std::sync::Arc;
 use std::time::Duration;
 
 use fcm::message::{Message, Notification, Target};
 use fcm::response::FcmResponse;
-use redis::aio::MultiplexedConnection;
+use redis::aio::ConnectionManager;
 use retainer::*;
 use serde_json::json;
 
 use online::catchers;
 use online::config::{init, Env};
 use online::db::online::find_all_offline;
-use online::models::online::Online;
 use online::routes;
 
 #[rocket::main]
@@ -24,7 +23,7 @@ async fn main() -> Result<(), rocket::Error> {
 
     // 2. Init and connect to Redis
     let client = redis::Client::open(env.redis_uri.clone()).unwrap();
-    let con: MultiplexedConnection = client.get_multiplexed_async_connection().await.unwrap();
+    let con: ConnectionManager = client.get_connection_manager().await.unwrap();
 
     // 3. Init Firebase client
     // To download the service account file follow this procedure:
@@ -54,8 +53,15 @@ async fn main() -> Result<(), rocket::Error> {
         //      message for all devices in a single time.
         loop {
             // process offline devices
-            let offline_devices: Vec<Online> = find_all_offline(&con).await;
-            for offline in offline_devices.into_iter() {
+            let offline_devices_res = find_all_offline(&con).await;
+            match &offline_devices_res {
+                Ok(_) => (),
+                Err(err) => {
+                    error!(target: "app", "cannot find all offline in db, err = {:?}", err);
+                    continue;
+                }
+            }
+            for offline in offline_devices_res.unwrap().into_iter() {
                 debug!(target: "app", "iterating offline = {:?}", &offline);
 
                 // if not in cache, add it and send the notification, otherwise skip this device
