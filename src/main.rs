@@ -69,7 +69,7 @@ async fn main() -> Result<(), rocket::Error> {
                 if cache.get(&uuid).await.is_none() {
                     // add uuid in cache (no need to use the value, so it's fixed to 0) with
                     // a defined timeout
-                    cache.insert(uuid, 0, Duration::from_secs(2 * 60)).await;
+                    cache.insert(uuid, 0, Duration::from_secs(3 * 60)).await;
                 } else {
                     continue;
                 }
