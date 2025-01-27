@@ -20,6 +20,7 @@ use online::routes;
 async fn main() -> Result<(), rocket::Error> {
     // 1. Init logger and env
     let env: Env = init();
+    let cache_timeout_seconds = env.cache_timeout_seconds.clone().parse().unwrap();
 
     // 2. Init and connect to Redis
     let client = redis::Client::open(env.redis_uri.clone()).unwrap();
@@ -69,7 +70,7 @@ async fn main() -> Result<(), rocket::Error> {
                 if cache.get(&uuid).await.is_none() {
                     // add uuid in cache (no need to use the value, so it's fixed to 0) with
                     // a defined timeout
-                    cache.insert(uuid, 0, Duration::from_secs(3 * 60)).await;
+                    cache.insert(uuid, 0, Duration::from_secs(cache_timeout_seconds)).await;
                 } else {
                     continue;
                 }
