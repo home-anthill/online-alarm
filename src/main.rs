@@ -12,7 +12,7 @@ use retainer::*;
 use serde_json::json;
 
 use online::catchers;
-use online::config::{init, Env};
+use online::config::{Env, init};
 use online::db::online::find_all_offline;
 use online::routes;
 
