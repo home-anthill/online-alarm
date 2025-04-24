@@ -5,6 +5,7 @@
 # this is only a placeholder, don't use it in production
 secret_key="3O46i/aNZk9/h2YMgoVwEobGUlKDVt1u/tA0rBJN3KM="
 port = 8088
+# log_level = "normal" by default
 
 [release]
 address = "0.0.0.0"
@@ -14,3 +15,4 @@ port = 80
 # generated via `openssl rand -base64 32`
 # this is only a placeholder, don't use it in production
 secret_key="fwVuHbHBMm4HKdoP3lSodsXsUYUYawqfD9emyTNnWJo="
+# log_level = "critical" by default
