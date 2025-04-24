@@ -63,7 +63,7 @@ async fn main() -> Result<(), rocket::Error> {
                 }
             }
             for offline in offline_devices_res.unwrap().into_iter() {
-                debug!(target: "app", "iterating offline = {:?}", &offline);
+                error!(target: "app", "iterating offline = {:?}", &offline);
 
                 // if not in cache, add it and send the notification, otherwise skip this device
                 let uuid = offline.uuid.clone();
