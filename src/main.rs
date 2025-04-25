@@ -1,33 +1,32 @@
 #[macro_use]
 extern crate rocket;
 
-use log::{debug, error, info};
-use std::sync::Arc;
-use std::time::Duration;
+use log::{debug, error, info, warn};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use dashmap::DashMap;
 use fcm::message::{Message, Notification, Target};
-use fcm::response::FcmResponse;
 use redis::aio::ConnectionManager;
-use retainer::*;
 use serde_json::json;
 
 use online::catchers;
 use online::config::{Env, init};
-use online::db::online::find_all_offline;
+use online::db::online::{filter_offline, filter_online, find_all};
 use online::routes;
 
 #[rocket::main]
 async fn main() -> Result<(), rocket::Error> {
     // 1. Init logger and env
     let env: Env = init();
-    let cache_timeout_seconds = env.cache_timeout_seconds.clone().parse().unwrap();
+    let cache_timeout_seconds: u128 = env.cache_timeout_seconds.clone().parse().unwrap();
+    let offline_timeout_seconds: u128 = env.offline_timeout_seconds.clone().parse().unwrap();
 
     // 2. Init and connect to Redis
     let client = redis::Client::open(env.redis_uri.clone()).unwrap();
     let con: ConnectionManager = client.get_connection_manager().await.unwrap();
 
     // 3. Init Firebase client
-    // To download the service account file follow this procedure:
+    // To download the service account file, follow this procedure:
     // a. Go to https://console.firebase.google.com/
     // b. Open your project
     // c. Click on the settings button and choose the Project settings option
@@ -41,60 +40,83 @@ async fn main() -> Result<(), rocket::Error> {
         .await
         .unwrap();
 
-    // 4. Init notification cache
-    // Cache to store UUIDs as keys that have been already notified to prevent too many notifications
-    let cache = Arc::new(Cache::new());
-    let cache_clone = cache.clone();
-    // monitor the cache to evict entries (using the same timing taken from Redis source code)
-    tokio::spawn(async move { cache_clone.monitor(4, 0.25, Duration::from_secs(3)).await });
+    // 4. Init cache
+    // It's used to store UUIDs as keys and insertion date as value to prevent too many notifications
+    let cache = DashMap::new();
 
-    // 5. find offline devices
+    // 5. send notifications for all offline devices
     tokio::task::spawn(async move {
         // TODO improve logic to group notifications by `fcmToken` to send only one
         //      message for all devices in a single time.
         loop {
-            // process offline devices
-            let offline_devices_res = find_all_offline(&con).await;
-            match &offline_devices_res {
+            // read all elements
+            // TODO this is bad, because I have to improve logic to clean old devices from redis and so on
+            let all_res = find_all(&con).await;
+            match &all_res {
                 Ok(_) => (),
                 Err(err) => {
-                    error!(target: "app", "cannot find all offline in db, err = {:?}", err);
+                    error!(target: "app", "cannot find all elements in db, err = {:?}", err);
                     continue;
                 }
             }
-            for offline in offline_devices_res.unwrap().into_iter() {
-                error!(target: "app", "iterating offline = {:?}", &offline);
+            let all_devices = all_res.unwrap();
+            let offline_devices = filter_offline(all_devices.clone(), offline_timeout_seconds);
+            let online_devices = filter_online(all_devices, offline_devices.clone());
 
-                // if not in cache, add it and send the notification, otherwise skip this device
+            // clean from cache all devices that become online
+            for online in online_devices.into_iter() {
+                if cache.get(&online.uuid).is_some() {
+                    cache.remove(&online.uuid);
+                    debug!(target: "app", "cleaned online device uuid={} from cache", &online.uuid);
+                }
+            }
+
+            // process all offline devices
+            for offline in offline_devices.into_iter() {
+                debug!(target: "app", "offline device uuid={} (createdAt={}, modifiedAt={})", &offline.uuid, &offline.createdAt, &offline.modifiedAt);
+                let curr_date: u128 = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
                 let uuid = offline.uuid.clone();
-                if cache.get(&uuid).await.is_none() {
-                    // add uuid in cache (no need to use the value, so it's fixed to 0) with
-                    // a defined timeout
-                    cache.insert(uuid, 0, Duration::from_secs(cache_timeout_seconds)).await;
+
+                if cache.get(&uuid).is_none() {
+                    warn!(target: "app", "adding offline device uuid={} to cache", &uuid);
+                    cache.insert(uuid, curr_date);
                 } else {
-                    continue;
+                    debug!(target: "app", "offline device uuid={} is already in cache", &uuid);
+                    let el = cache.get(&uuid).unwrap().value().to_owned();
+                    if el < (curr_date - (cache_timeout_seconds * 1000)) {
+                        warn!(target: "app", "sending message to FCM for uuid={}", &uuid);
+                        // build the notification and send it
+                        let message = Message {
+                            data: Some(json!({
+                               "message": "Offline",
+                            })),
+                            notification: Some(Notification {
+                                title: Some("home anthill".to_string()),
+                                body: Some("Device is offline".to_string()),
+                                image: None,
+                            }),
+                            target: Target::Token(offline.fcmToken.clone()),
+                            android: None,
+                            webpush: None,
+                            apns: None,
+                            fcm_options: None,
+                        };
+
+                        match client.send(message).await {
+                            Ok(response) => {
+                                debug!(target: "app", "FCM response = {:?}", &response);
+                                // renew cache re-adding the element with a new date
+                                cache.remove(&uuid);
+                                warn!(target: "app", "re-adding offline device uuid={} to cache", &uuid);
+                                cache.insert(uuid, curr_date);
+                            }
+                            Err(err) => {
+                                error!(target: "app", "cannot send message to FCM, err = {:?}", err);
+                            }
+                        }
+                    }
                 }
-
-                // build the notification and send it
-                let message = Message {
-                    data: Some(json!({
-                       "message": "Hello msg!",
-                    })),
-                    notification: Some(Notification {
-                        title: Some("Hello".to_string()),
-                        body: Some("message body".to_string()),
-                        image: None,
-                    }),
-                    target: Target::Token(offline.fcmToken.clone()),
-                    android: None,
-                    webpush: None,
-                    apns: None,
-                    fcm_options: None,
-                };
-                let response: FcmResponse = client.send(message).await.unwrap();
-                debug!(target: "app", "response = {:?}", &response);
             }
-
             tokio::time::sleep(Duration::from_secs(10)).await;
         }
     });

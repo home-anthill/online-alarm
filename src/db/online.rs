@@ -1,4 +1,4 @@
-use log::{debug, error};
+use log::error;
 use std::collections::HashMap;
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -10,11 +10,9 @@ use crate::errors::db_error::DbError;
 use crate::errors::redis_error::RedisError;
 use crate::models::online::Online;
 
-pub async fn find_all_offline(db: &ConnectionManager) -> Result<Vec<Online>, anyhow::Error> {
-    debug!(target: "app", "find_all_offline - to get all online elements from db");
+pub async fn find_all(db: &ConnectionManager) -> Result<Vec<Online>, anyhow::Error> {
     let mut con = db.clone();
-
-    let mut not_online_devices: Vec<Online> = vec![];
+    let mut elements: Vec<Online> = vec![];
 
     // get all keys with format 'online-<uuid>'
     let db_keys_iter_res: RedisResult<AsyncIter<String>> =
@@ -45,28 +43,40 @@ pub async fn find_all_offline(db: &ConnectionManager) -> Result<Vec<Online>, any
         let modified_at: Result<u128, DbError> = get_date_field_by_name(&value, "modifiedAt");
 
         if api_token.is_err() {
-            error!(target: "app", "REST - GET - find_all_offline - apiToken is missing");
+            error!(target: "app", "find_all - apiToken is missing");
             continue;
         }
         if created_at.is_err() || modified_at.is_err() {
-            error!(target: "app", "REST - GET - find_all_offline - cannot parse dates");
+            error!(target: "app", "find_all - cannot parse dates");
             continue;
         }
-
-        let curr_date: u128 = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
-        let mod_date: u128 = modified_at?;
-        if mod_date < (curr_date - (60 * 1000)) {
-            let online: Online = Online {
-                uuid: db_key,
-                apiToken: api_token?.to_string(),
-                fcmToken: fcm_token?.to_string(),
-                createdAt: created_at?.to_string(),
-                modifiedAt: mod_date.to_string(),
-            };
-            not_online_devices.push(online);
-        }
+        let online: Online = Online {
+            uuid: db_key,
+            apiToken: api_token?.to_string(),
+            fcmToken: fcm_token?.to_string(),
+            createdAt: created_at?.to_string(),
+            modifiedAt: modified_at?.to_string(),
+        };
+        elements.push(online);
     }
-    Ok(not_online_devices)
+    Ok(elements)
+}
+
+pub fn filter_offline(all: Vec<Online>, offline_timeout_seconds: u128) -> Vec<Online> {
+    let curr_date: u128 = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+    all.into_iter()
+        .filter(|el: &Online| {
+            let mod_date: u128 = el.modifiedAt.parse().unwrap();
+            mod_date < (curr_date - (offline_timeout_seconds * 1000))
+        })
+        .collect()
+}
+
+pub fn filter_online(all: Vec<Online>, offline: Vec<Online>) -> Vec<Online> {
+    let offline_uuids: Vec<String> = offline.into_iter().map(|el| el.uuid).collect();
+    all.into_iter()
+        .filter(|el: &Online| !offline_uuids.contains(&el.uuid))
+        .collect()
 }
 
 pub fn get_all_keys_pattern() -> String {
