@@ -67,7 +67,7 @@ async fn main() -> Result<(), rocket::Error> {
             for online in online_devices.into_iter() {
                 if cache.get(&online.uuid).is_some() {
                     cache.remove(&online.uuid);
-                    debug!(target: "app", "cleaned online device uuid={} from cache", &online.uuid);
+                    info!(target: "app", "cleaned online device uuid={} from cache", &online.uuid);
                 }
             }
 
