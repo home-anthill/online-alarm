@@ -5,9 +5,11 @@ use log::{debug, error, info, warn};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
-use fcm::message::{Message, Notification, Target};
+use fcm_rs::{
+    client::FcmClient,
+    models::{Message, Notification},
+};
 use redis::aio::ConnectionManager;
-use serde_json::json;
 
 use online::catchers;
 use online::config::{Env, init};
@@ -34,11 +36,7 @@ async fn main() -> Result<(), rocket::Error> {
     //    https://console.firebase.google.com/project/<YOUR_PROJECT_ID>/settings/serviceaccounts/adminsdk
     // e. Click on the "Generate new private key" button to download the service account .json file
     // f. Place `serviceAccountKey.json` at the root of this project
-    let client = fcm::FcmClient::builder()
-        .service_account_key_json_path("./serviceAccountKey.json")
-        .build()
-        .await
-        .unwrap();
+    let client = FcmClient::new("./serviceAccountKey.json").await.unwrap();
 
     // 4. Init cache
     // It's used to store UUIDs as keys and insertion date as value to prevent too many notifications
@@ -87,33 +85,26 @@ async fn main() -> Result<(), rocket::Error> {
                         warn!(target: "app", "sending message to FCM for uuid={}", &uuid);
                         // build the notification and send it
                         let message = Message {
-                            data: Some(json!({
-                               "message": "Offline",
-                            })),
+                            token: Some(offline.fcmToken.clone()),
                             notification: Some(Notification {
                                 title: Some("home anthill".to_string()),
                                 body: Some("Device is offline".to_string()),
-                                image: None,
                             }),
-                            target: Target::Token(offline.fcmToken.clone()),
-                            android: None,
-                            webpush: None,
-                            apns: None,
-                            fcm_options: None,
+                            data: None,
                         };
 
                         match client.send(message).await {
                             Ok(response) => {
                                 debug!(target: "app", "FCM response = {:?}", &response);
-                                // renew cache re-adding the element with a new date
-                                cache.remove(&uuid);
-                                warn!(target: "app", "re-adding offline device uuid={} to cache", &uuid);
-                                cache.insert(uuid, curr_date);
                             }
                             Err(err) => {
                                 error!(target: "app", "cannot send message to FCM, err = {:?}", err);
                             }
                         }
+                        // renew cache re-adding the element with a new date
+                        cache.remove(&uuid);
+                        warn!(target: "app", "re-adding offline device uuid={} to cache", &uuid);
+                        cache.insert(uuid, curr_date);
                     }
                 }
             }

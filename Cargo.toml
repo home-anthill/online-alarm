@@ -30,9 +30,7 @@ dotenvy = "^0.15.7"
 envy = "^0.4.2"
 futures = "^0.3.31"
 dashmap = "^6.1.0"
-
-# Firebase library with the new http v1 api - still under development
-fcm = { git = "https://github.com/rj76/fcm-rust.git" }
+fcm-rs = "^0.2.0"
 
 # To use Serialize and Deserialize traits, you must include Serde.
 # The "derive" feature is only required when
