@@ -1,7 +1,6 @@
-use log::error;
-
 use rocket::http::Status;
 use rocket::request::Request;
+use tracing::error;
 
 use crate::errors::api_error::ApiError;
 

@@ -1,7 +1,6 @@
 #[macro_use]
 extern crate rocket;
 
-use log::{debug, error, info, warn};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
@@ -10,6 +9,7 @@ use fcm_rs::{
     models::{Message, Notification},
 };
 use redis::aio::ConnectionManager;
+use tracing::{debug, error, info, warn};
 
 use online::catchers;
 use online::config::{Env, init};

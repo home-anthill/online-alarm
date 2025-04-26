@@ -1,10 +1,10 @@
-use log::error;
 use std::collections::HashMap;
 use std::env;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures::StreamExt;
 use redis::{AsyncCommands, AsyncIter, RedisResult, aio::ConnectionManager};
+use tracing::error;
 
 use crate::errors::db_error::DbError;
 use crate::errors::redis_error::RedisError;
