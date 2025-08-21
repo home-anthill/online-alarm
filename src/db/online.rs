@@ -20,8 +20,7 @@ pub async fn find_all(db: &ConnectionManager) -> Result<Vec<Online>, anyhow::Err
     if db_keys_iter_res.is_err() {
         return Err(anyhow::Error::from(RedisError::GetKeysError));
     }
-    let db_keys: Vec<String> = db_keys_iter_res?.collect().await;
-
+    let db_keys: Vec<String> = db_keys_iter_res?.map(Result::unwrap).collect::<Vec<String>>().await;
     for db_key in db_keys {
         // hgetall returns the entire redis hash table (with all "key: value")
         let value_res: RedisResult<HashMap<String, String>> = con.hgetall(&db_key).await;
