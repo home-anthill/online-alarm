@@ -63,26 +63,27 @@ async fn main() -> Result<(), rocket::Error> {
 
             // clean from cache all devices that become online
             for online in online_devices.into_iter() {
-                if cache.get(&online.uuid).is_some() {
-                    cache.remove(&online.uuid);
-                    info!(target: "app", "cleaned online device uuid={} from cache", &online.uuid);
+                let key = format!("{}-{}", online.deviceUuid, online.featureUuid);
+                if cache.get(&key).is_some() {
+                    cache.remove(&key);
+                    info!(target: "app", "cleaned online device key={} from cache", &key);
                 }
             }
 
             // process all offline devices
             for offline in offline_devices.into_iter() {
-                debug!(target: "app", "offline device uuid={} (createdAt={}, modifiedAt={})", &offline.uuid, &offline.createdAt, &offline.modifiedAt);
+                let key = format!("{}-{}", offline.deviceUuid, offline.featureUuid);
+                debug!(target: "app", "offline device key={} (createdAt={}, modifiedAt={})", &key, &offline.createdAt, &offline.modifiedAt);
                 let curr_date: u128 = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
-                let uuid = offline.uuid.clone();
 
-                if cache.get(&uuid).is_none() {
-                    warn!(target: "app", "adding offline device uuid={} to cache", &uuid);
-                    cache.insert(uuid, curr_date);
+                if cache.get(&key).is_none() {
+                    warn!(target: "app", "adding offline device key={} to cache", &key);
+                    cache.insert(key, curr_date);
                 } else {
-                    debug!(target: "app", "offline device uuid={} is already in cache", &uuid);
-                    let el = cache.get(&uuid).unwrap().value().to_owned();
+                    debug!(target: "app", "offline device key={} is already in cache", &key);
+                    let el = cache.get(&key).unwrap().value().to_owned();
                     if el < (curr_date - (cache_timeout_seconds * 1000)) {
-                        warn!(target: "app", "sending message to FCM for uuid={}", &uuid);
+                        warn!(target: "app", "sending message to FCM for key={}", &key);
                         // build the notification and send it
                         let message = Message {
                             token: Some(offline.fcmToken.clone()),
@@ -102,9 +103,9 @@ async fn main() -> Result<(), rocket::Error> {
                             }
                         }
                         // renew cache re-adding the element with a new date
-                        cache.remove(&uuid);
-                        warn!(target: "app", "re-adding offline device uuid={} to cache", &uuid);
-                        cache.insert(uuid, curr_date);
+                        cache.remove(&key);
+                        warn!(target: "app", "re-adding offline device key={} to cache", &key);
+                        cache.insert(key, curr_date);
                     }
                 }
             }

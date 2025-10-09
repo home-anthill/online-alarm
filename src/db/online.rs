@@ -14,7 +14,7 @@ pub async fn find_all(db: &ConnectionManager) -> Result<Vec<Online>, anyhow::Err
     let mut con = db.clone();
     let mut elements: Vec<Online> = vec![];
 
-    // get all keys with format 'online-<uuid>'
+    // get all keys with format 'online_<deviceUuid>_feature_<featureUuid>'
     let db_keys_iter_res: RedisResult<AsyncIter<String>> =
         con.scan_match::<&str, String>(get_all_keys_pattern().as_str()).await;
     if db_keys_iter_res.is_err() {
@@ -28,6 +28,10 @@ pub async fn find_all(db: &ConnectionManager) -> Result<Vec<Online>, anyhow::Err
             return Err(anyhow::Error::from(RedisError::HGetAllError));
         }
         let value: HashMap<String, String> = value_res?;
+
+        let items: Vec<&str> = db_key.split('_').collect();
+        let device_uuid = items.get(1).unwrap().to_string();
+        let feature_uuid = items.last().unwrap().to_string();
 
         let api_token: Result<&str, DbError> = match &value.get("apiToken") {
             Some(val) => Ok(val),
@@ -50,8 +54,9 @@ pub async fn find_all(db: &ConnectionManager) -> Result<Vec<Online>, anyhow::Err
             continue;
         }
         let online: Online = Online {
-            uuid: db_key,
             apiToken: api_token?.to_string(),
+            deviceUuid: device_uuid.to_string(),
+            featureUuid: feature_uuid.to_string(),
             fcmToken: fcm_token?.to_string(),
             createdAt: created_at?.to_string(),
             modifiedAt: modified_at?.to_string(),
@@ -72,15 +77,18 @@ pub fn filter_offline(all: Vec<Online>, offline_timeout_seconds: u128) -> Vec<On
 }
 
 pub fn filter_online(all: Vec<Online>, offline: Vec<Online>) -> Vec<Online> {
-    let offline_uuids: Vec<String> = offline.into_iter().map(|el| el.uuid).collect();
+    let offline_uuids: Vec<String> = offline
+        .into_iter()
+        .map(|el| format!("{}-{}", el.deviceUuid, el.featureUuid))
+        .collect();
     all.into_iter()
-        .filter(|el: &Online| !offline_uuids.contains(&el.uuid))
+        .filter(|el: &Online| !offline_uuids.contains(&format!("{}-{}", el.deviceUuid, el.featureUuid)))
         .collect()
 }
 
 pub fn get_all_keys_pattern() -> String {
     let env = env::var("ENV").ok().unwrap_or("".to_string());
-    (if env == "testing" { "test-*" } else { "online-*" }).to_owned()
+    (if env == "testing" { "test_*" } else { "online_*" }).to_owned()
 }
 
 pub fn get_date_field_by_name(value: &HashMap<String, String>, field_name: &str) -> Result<u128, DbError> {
