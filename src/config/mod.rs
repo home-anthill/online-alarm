@@ -37,12 +37,12 @@ pub fn init() -> Env {
         let stdout = std::io::stdout.with_filter(filter);
         let debug_file = RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
-            .filename_prefix("all")
+            .filename_prefix("info")
             .filename_suffix("log")
             .max_log_files(5)
             .build("./logs")
-            .expect("initializing rolling debug_file appender failed")
-            .with_filter(|meta| meta.target() == "app");
+            .expect("initializing rolling info_file appender failed")
+            .with_max_level(tracing::Level::INFO);
         let error_file = RollingFileAppender::builder()
             .rotation(Rotation::DAILY)
             .filename_prefix("error")
@@ -57,6 +57,7 @@ pub fn init() -> Env {
             .compact()
             .with_writer(writer)
             .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
             .init();
     }
 
