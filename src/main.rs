@@ -1,9 +1,10 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
-use fcm_rs::{
-    client::FcmClient,
-    models::{Message, Notification},
+use google_fcm1::{
+    FirebaseCloudMessaging,
+    api::{Message, Notification, SendMessageRequest},
+    hyper_rustls, hyper_util, yup_oauth2,
 };
 use redis::aio::ConnectionManager;
 use rocket::{self, catchers, routes};
@@ -58,7 +59,30 @@ async fn main() -> Result<(), rocket::Error> {
     //    https://console.firebase.google.com/project/<YOUR_PROJECT_ID>/settings/serviceaccounts/adminsdk
     // e. Click on the "Generate new private key" button to download the service account .json file
     // f. Place `serviceAccountKey.json` at the root of this project
-    let fcm_client = FcmClient::new(&env.fcm_service_account_key_path).await.expect("failed to initialize FCM client");
+    let service_account_key = yup_oauth2::read_service_account_key(&env.fcm_service_account_key_path)
+        .await
+        .expect("failed to read FCM service account key file");
+    let project_id = service_account_key.project_id.clone().expect("project_id missing in FCM service account key");
+    let https_connector = hyper_rustls::HttpsConnectorBuilder::new()
+        .with_native_roots()
+        .expect("failed to load native TLS roots")
+        .https_or_http()
+        .enable_http2()
+        .build();
+    // Auth client (body type inferred by yup-oauth2 internally)
+    let auth_hyper_client = hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+        .build(https_connector.clone());
+    let auth = yup_oauth2::ServiceAccountAuthenticator::with_client(
+        service_account_key,
+        yup_oauth2::CustomHyperClientBuilder::from(auth_hyper_client),
+    )
+    .build()
+    .await
+    .expect("failed to build FCM authenticator");
+    // Hub client (body type BoxBody<Bytes, Error> inferred by FirebaseCloudMessaging::new)
+    let fcm_hyper_client =
+        hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new()).build(https_connector);
+    let fcm_hub = FirebaseCloudMessaging::new(fcm_hyper_client, auth);
 
     // 4. Init cache
     // It's used to store UUIDs as keys and insertion date as value to prevent too many notifications
@@ -113,18 +137,22 @@ async fn main() -> Result<(), rocket::Error> {
                         debug!(target: "app", "offline device key={} is already in cache", &key);
                         if cached_date < curr_date.saturating_sub(cache_timeout_seconds.saturating_mul(1000)) {
                             warn!(target: "app", "sending message to FCM for key={}", &key);
-                            let message = Message {
-                                token: Some(offline.fcm_token.clone()),
-                                notification: Some(Notification {
-                                    title: Some("home anthill".to_string()),
-                                    body: Some("Device is offline".to_string()),
+                            let req = SendMessageRequest {
+                                message: Some(Message {
+                                    token: Some(offline.fcm_token.clone()),
+                                    notification: Some(Notification {
+                                        title: Some("home anthill".to_string()),
+                                        body: Some("Device is offline".to_string()),
+                                        image: None,
+                                    }),
+                                    ..Default::default()
                                 }),
-                                data: None,
+                                validate_only: None,
                             };
-
-                            match fcm_client.send(message).await {
-                                Ok(response) => {
-                                    debug!(target: "app", "FCM response = {:?}", &response);
+                            let parent = format!("projects/{}", project_id);
+                            match fcm_hub.projects().messages_send(req, &parent).doit().await {
+                                Ok((_resp, msg)) => {
+                                    debug!(target: "app", "FCM response = {:?}", &msg);
                                 }
                                 Err(err) => {
                                     error!(target: "app", "cannot send message to FCM, err = {:?}", err);

@@ -32,7 +32,7 @@ Current tests are **unit tests only** (in `src/models/topic.rs`). No external in
 
 **Main flow** (`src/main.rs`):
 1. Initializes logging (rolling file appenders split by level) and loads env config
-2. Connects to Redis (`redis_client`) and initializes FCM client (`fcm_client`)
+2. Connects to Redis (`redis_client`) and initializes FCM hub (`fcm_hub`) via `google-fcm1`
 3. Creates a `DashMap` cache for notification deduplication (tracks recently-sent device notifications with configurable TTL)
 4. Spawns a background tokio task (`notification_handle`) that:
    - Polls Redis every 10 seconds for all devices
@@ -45,7 +45,7 @@ Current tests are **unit tests only** (in `src/models/topic.rs`). No external in
 5. Starts the Rocket HTTP server
 
 **Module structure**:
-- `config/` — logging setup, env var loading (`REDIS_URI`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `CACHE_TIMEOUT_SECONDS`, `OFFLINE_TIMEOUT_SECONDS`, `FCM_SERVICE_ACCOUNT_KEY_PATH`). Logging uses rolling file appenders (daily rotation, 5 files max): `info*.log` for INFO and below, `error*.log` for ERROR only, both filtered to `target: "app"`. An invalid `LOG_LEVEL` value is reported via `eprintln!` before the subscriber is installed (tracing is not yet available at that point), then falls back to `DEBUG`. Redis credentials are redacted in logs and debug output to prevent accidental exposure.
+- `config/` — logging setup, env var loading (`REDIS_URI`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `CACHE_TIMEOUT_SECONDS`, `OFFLINE_TIMEOUT_SECONDS`, `FCM_SERVICE_ACCOUNT_KEY_PATH`). Logging uses rolling file appenders (daily rotation, 5 files max): `info*.log` for INFO and below (no target filter — includes all crates), `error*.log` for ERROR only (filtered to `target: "app"`), stdout also filtered to `target: "app"`. `set_global_default` is used instead of `.init()` intentionally so Rocket can install its own `RocketLogger` for startup output. An invalid `LOG_LEVEL` value is reported via `eprintln!` before the subscriber is installed (tracing is not yet available at that point), then falls back to `DEBUG`. Redis credentials are redacted in logs and debug output to prevent accidental exposure.
 - `routes/` — single REST endpoint: `GET /keepalive`
 - `models/` — `Online` (device status with `device_uuid`, `feature_uuid`, `api_token`, `fcm_token`; `created_at`/`modified_at` are `u64` millisecond epoch timestamps; `cache_key()` → `"{device_uuid}-{feature_uuid}"`), `Topic` (MQTT topic parser: `online/{device_uuid}/features/{feature_uuid}`). `Online` is constructed directly from Redis hash fields with no serde derives.
 - `db/` — Redis operations: `find_all` scans `online_*` keys (or `test_*` when `ENV=testing`). Redis hash fields per key: `apiToken`, `fcmToken`, `createdAt`, `modifiedAt` (millisecond epoch timestamps stored as decimal strings). SCAN iteration errors and per-key `HGETALL` errors are logged and skipped per-device (not propagated). `filter_offline` compares `modified_at` (u64) directly against the computed threshold. `filter_online` uses a zero-allocation `HashSet<(&str, &str)>` of `(device_uuid, feature_uuid)` string-slice pairs for efficient dedup during update.
