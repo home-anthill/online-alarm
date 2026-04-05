@@ -1,12 +1,9 @@
 use thiserror::Error;
 
-// custom error, based on 'thiserror' library
 #[derive(Error, Debug)]
 pub enum DbError {
-    #[error("Value not found in db object")]
-    DbNotFound,
-    #[error("Cannot parse string to numeric value")]
-    DbStrToNumError,
-    #[error("Unknown field name")]
-    UnknownFieldNameError,
+    #[error("Cannot parse string to numeric value: {0}")]
+    DbStrToNumError(#[source] std::num::ParseIntError),
+    #[error("Required field '{0}' is missing")]
+    DbMissingFieldError(String),
 }

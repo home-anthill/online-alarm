@@ -11,26 +11,21 @@ pub struct Topic {
 }
 
 impl Topic {
-    pub fn new(topic: &str) -> Self {
+    pub fn new(topic: &str) -> Option<Self> {
         // topic form is:
         //  online/device_uuid/features/device_uuid
         let items: Vec<&str> = topic.split('/').collect();
-        Self {
-            family: items.first().unwrap().to_string(),
-            device_id: items.get(1).unwrap().to_string(),
-            feature_name: items.last().unwrap().to_string(),
-        }
+        Some(Self {
+            family: items.first()?.to_string(),
+            device_id: items.get(1)?.to_string(),
+            feature_name: items.last()?.to_string(),
+        })
     }
 }
 
 impl fmt::Display for Topic {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        fmt.write_str(self.family.as_str())?;
-        fmt.write_str("/")?;
-        fmt.write_str(self.device_id.as_str())?;
-        fmt.write_str("/features/")?;
-        fmt.write_str(self.feature_name.as_str())?;
-        Ok(())
+        write!(fmt, "{}/{}/features/{}", self.family, self.device_id, self.feature_name)
     }
 }
 
@@ -39,12 +34,11 @@ mod tests {
     use crate::models::topic::Topic;
     use pretty_assertions::assert_eq;
 
-    #[test]
     #[test_log::test]
     fn check_topic_display() {
         let device_uuid = "246e3256-f0dd-4fcb-82c5-ee20c2267eeb";
         let feature_uuid = "b6505821-3ac9-45e6-9018-72d3ecb9b591";
-        let topic: Topic = Topic::new(format!("online/{}/features/{}", device_uuid, feature_uuid).as_str());
+        let topic: Topic = Topic::new(&format!("online/{}/features/{}", device_uuid, feature_uuid)).unwrap();
         let expected = topic.to_string();
         assert_eq!(format!("online/{}/features/{}", device_uuid, feature_uuid), expected);
     }

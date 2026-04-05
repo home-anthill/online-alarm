@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate rocket;
-
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
@@ -9,23 +6,48 @@ use fcm_rs::{
     models::{Message, Notification},
 };
 use redis::aio::ConnectionManager;
+use rocket::{self, catchers, routes};
 use tracing::{debug, error, info, warn};
 
-use online::catchers;
-use online::config::{Env, init};
+use online::catchers as app_catchers;
+use online::config::{AppEnv, Env, init};
 use online::db::online::{filter_offline, filter_online, find_all};
-use online::routes;
+use online::routes as app_routes;
 
 #[rocket::main]
+#[allow(clippy::result_large_err)]
 async fn main() -> Result<(), rocket::Error> {
     // 1. Init logger and env
-    let env: Env = init();
-    let cache_timeout_seconds: u128 = env.cache_timeout_seconds.clone().parse().unwrap();
-    let offline_timeout_seconds: u128 = env.offline_timeout_seconds.clone().parse().unwrap();
+    let (env, app_env): (Env, AppEnv) = init();
+    let cache_timeout_seconds = env.cache_timeout_seconds;
+    let offline_timeout_seconds = env.offline_timeout_seconds;
+    let is_testing = app_env.is_testing();
 
     // 2. Init and connect to Redis
-    let client = redis::Client::open(env.redis_uri.clone()).unwrap();
-    let con: ConnectionManager = client.get_connection_manager().await.unwrap();
+    // If credentials are configured, inject them into the URI:
+    //   redis://host:port -> redis://username:password@host:port
+    if !env.redis_username.is_empty() && env.redis_password.is_empty() {
+        warn!(target: "app", "REDIS_USERNAME is set but REDIS_PASSWORD is empty — no authentication will be attempted");
+    }
+    let redis_url = if env.redis_password.is_empty() {
+        env.redis_uri.clone()
+    } else {
+        match env.redis_uri.find("://") {
+            Some(scheme_end) => format!(
+                "{scheme}{username}:{password}@{rest}",
+                scheme = &env.redis_uri[..scheme_end + 3],
+                username = urlencoding::encode(&env.redis_username),
+                password = urlencoding::encode(&env.redis_password),
+                rest = &env.redis_uri[scheme_end + 3..],
+            ),
+            None => {
+                warn!(target: "app", "REDIS_URI has no recognizable scheme (missing '://'), skipping credential injection");
+                env.redis_uri.clone()
+            }
+        }
+    };
+    let redis_client = redis::Client::open(redis_url).expect("invalid Redis URI");
+    let con: ConnectionManager = redis_client.get_connection_manager().await.expect("failed to connect to Redis");
 
     // 3. Init Firebase client
     // To download the service account file, follow this procedure:
@@ -36,76 +58,82 @@ async fn main() -> Result<(), rocket::Error> {
     //    https://console.firebase.google.com/project/<YOUR_PROJECT_ID>/settings/serviceaccounts/adminsdk
     // e. Click on the "Generate new private key" button to download the service account .json file
     // f. Place `serviceAccountKey.json` at the root of this project
-    let client = FcmClient::new("./serviceAccountKey.json").await.unwrap();
+    let fcm_client = FcmClient::new(&env.fcm_service_account_key_path).await.expect("failed to initialize FCM client");
 
     // 4. Init cache
     // It's used to store UUIDs as keys and insertion date as value to prevent too many notifications
-    let cache = DashMap::new();
+    let cache: DashMap<String, u64> = DashMap::new();
 
     // 5. send notifications for all offline devices
-    tokio::task::spawn(async move {
+    let notification_handle = tokio::task::spawn(async move {
         // TODO improve logic to group notifications by `fcmToken` to send only one
         //      message for all devices in a single time.
         loop {
             // read all elements
             // TODO this is bad, because I have to improve logic to clean old devices from redis and so on
-            let all_res = find_all(&con).await;
-            match &all_res {
-                Ok(_) => (),
+            let all_devices = match find_all(&con, is_testing).await {
+                Ok(devices) => devices,
                 Err(err) => {
                     error!(target: "app", "cannot find all elements in db, err = {:?}", err);
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                     continue;
                 }
-            }
-            let all_devices = all_res.unwrap();
-            let offline_devices = filter_offline(all_devices.clone(), offline_timeout_seconds);
-            let online_devices = filter_online(all_devices, offline_devices.clone());
+            };
+            let offline_devices = filter_offline(&all_devices, offline_timeout_seconds);
+            let online_devices = filter_online(&all_devices, &offline_devices);
 
             // clean from cache all devices that become online
-            for online in online_devices.into_iter() {
-                let key = format!("{}-{}", online.deviceUuid, online.featureUuid);
-                if cache.get(&key).is_some() {
-                    cache.remove(&key);
+            for online in online_devices {
+                let key = online.cache_key();
+                if cache.remove(&key).is_some() {
                     info!(target: "app", "cleaned online device key={} from cache", &key);
                 }
             }
 
             // process all offline devices
-            for offline in offline_devices.into_iter() {
-                let key = format!("{}-{}", offline.deviceUuid, offline.featureUuid);
-                debug!(target: "app", "offline device key={} (createdAt={}, modifiedAt={})", &key, &offline.createdAt, &offline.modifiedAt);
-                let curr_date: u128 = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis();
+            let curr_date: u64 = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock is before UNIX epoch")
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX);
 
-                if cache.get(&key).is_none() {
-                    warn!(target: "app", "adding offline device key={} to cache", &key);
-                    cache.insert(key, curr_date);
-                } else {
-                    debug!(target: "app", "offline device key={} is already in cache", &key);
-                    let el = cache.get(&key).unwrap().value().to_owned();
-                    if el < (curr_date - (cache_timeout_seconds * 1000)) {
-                        warn!(target: "app", "sending message to FCM for key={}", &key);
-                        // build the notification and send it
-                        let message = Message {
-                            token: Some(offline.fcmToken.clone()),
-                            notification: Some(Notification {
-                                title: Some("home anthill".to_string()),
-                                body: Some("Device is offline".to_string()),
-                            }),
-                            data: None,
-                        };
+            for offline in offline_devices {
+                let key = offline.cache_key();
+                debug!(target: "app", "offline device key={} (created_at={}, modified_at={})", &key, &offline.created_at, &offline.modified_at);
 
-                        match client.send(message).await {
-                            Ok(response) => {
-                                debug!(target: "app", "FCM response = {:?}", &response);
-                            }
-                            Err(err) => {
-                                error!(target: "app", "cannot send message to FCM, err = {:?}", err);
-                            }
-                        }
-                        // renew cache re-adding the element with a new date
-                        cache.remove(&key);
-                        warn!(target: "app", "re-adding offline device key={} to cache", &key);
+                match cache.get(&key) {
+                    None => {
+                        warn!(target: "app", "adding offline device key={} to cache", &key);
                         cache.insert(key, curr_date);
+                    }
+                    Some(entry) => {
+                        let cached_date = *entry.value();
+                        drop(entry); // release DashMap lock before doing async work
+                        debug!(target: "app", "offline device key={} is already in cache", &key);
+                        if cached_date < curr_date.saturating_sub(cache_timeout_seconds.saturating_mul(1000)) {
+                            warn!(target: "app", "sending message to FCM for key={}", &key);
+                            let message = Message {
+                                token: Some(offline.fcm_token.clone()),
+                                notification: Some(Notification {
+                                    title: Some("home anthill".to_string()),
+                                    body: Some("Device is offline".to_string()),
+                                }),
+                                data: None,
+                            };
+
+                            match fcm_client.send(message).await {
+                                Ok(response) => {
+                                    debug!(target: "app", "FCM response = {:?}", &response);
+                                }
+                                Err(err) => {
+                                    error!(target: "app", "cannot send message to FCM, err = {:?}", err);
+                                }
+                            }
+                            // renew cache with a new date (insert overwrites existing entry)
+                            warn!(target: "app", "re-adding offline device key={} to cache", &key);
+                            cache.insert(key, curr_date);
+                        }
                     }
                 }
             }
@@ -113,22 +141,24 @@ async fn main() -> Result<(), rocket::Error> {
         }
     });
 
-    // 4. Init Rocket
+    // 6. Init Rocket
     // a) define APIs
     // b) define error handlers
     info!(target: "app", "Starting Rocket...");
     let _rocket = rocket::build()
-        .mount("/", routes![routes::api::keep_alive])
+        .mount("/", routes![app_routes::api::keep_alive])
         .register(
             "/",
             catchers![
-                catchers::bad_request,
-                catchers::not_found,
-                catchers::internal_server_error,
+                app_catchers::bad_request,
+                app_catchers::not_found,
+                app_catchers::internal_server_error,
+                app_catchers::service_unavailable,
             ],
         )
         .launch()
         .await?;
 
+    notification_handle.abort();
     Ok(())
 }

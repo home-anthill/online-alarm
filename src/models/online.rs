@@ -1,28 +1,15 @@
-use serde::{Deserialize, Serialize};
-
-#[allow(non_snake_case)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct Online {
-    pub apiToken: String,
-    pub deviceUuid: String,
-    pub featureUuid: String,
-    pub fcmToken: String,
-    pub createdAt: String,
-    pub modifiedAt: String,
+    pub api_token: String,
+    pub device_uuid: String,
+    pub feature_uuid: String,
+    pub fcm_token: String,
+    pub created_at: u64,
+    pub modified_at: u64,
 }
 
-impl IntoIterator for Online {
-    type Item = String;
-    type IntoIter = std::array::IntoIter<String, 6>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIterator::into_iter([
-            self.apiToken,
-            self.deviceUuid,
-            self.featureUuid,
-            self.fcmToken,
-            self.createdAt,
-            self.modifiedAt,
-        ])
+impl Online {
+    pub fn cache_key(&self) -> String {
+        format!("{}-{}", self.device_uuid, self.feature_uuid)
     }
 }

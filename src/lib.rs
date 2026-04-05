@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate rocket;
-
 pub mod catchers;
 pub mod config;
 pub mod db;

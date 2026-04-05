@@ -1,10 +1,15 @@
 [default]
 
+# Local development Redis URL with authentication
+[default.databases.redis_pool]
+url = "redis://redisuser:Password1!@localhost:6379"
+
 [debug]
-# generated via `openssl rand -base64 32`
-# this is only a placeholder, don't use it in production
-secret_key="3O46i/aNZk9/h2YMgoVwEobGUlKDVt1u/tA0rBJN3KM="
+# secret_key = when compiled in debug mode, a fresh key is generated automatically.
 port = 8088
+limits = { json = "8 KiB" }
+# Disable CLI coloring in Rocket framework to ensure plaintext logs.
+cli_colors = false
 
 [release]
 address = "0.0.0.0"
@@ -13,4 +18,7 @@ port = 80
 # check https://rocket.rs/v0.5/guide/configuration/#secret-key
 # generated via `openssl rand -base64 32`
 # this is only a placeholder, don't use it in production
-secret_key="fwVuHbHBMm4HKdoP3lSodsXsUYUYawqfD9emyTNnWJo="
+secret_key="PMff4Rb7uhvW4eyvfEX16SvciUjmeSqcFsFwtXx/e0M="
+limits = { json = "8 KiB" }
+# Disable CLI coloring in Rocket framework to ensure plaintext logs.
+cli_colors = false
