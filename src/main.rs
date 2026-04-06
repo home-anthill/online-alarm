@@ -169,9 +169,7 @@ async fn main() -> Result<(), rocket::Error> {
         }
     });
 
-    // 6. Init Rocket
-    // a) define APIs
-    // b) define error handlers
+    // 6. Launch Rocket for the health endpoint
     info!(target: "app", "Starting Rocket...");
     let _rocket = rocket::build()
         .mount("/", routes![app_routes::api::keep_alive])
