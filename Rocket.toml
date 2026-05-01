@@ -2,7 +2,7 @@
 
 [debug]
 # secret_key = when compiled in debug mode, a fresh key is generated automatically.
-port = 8088
+port = 8091
 limits = { json = "8 KiB" }
 # Disable CLI coloring in Rocket framework to ensure plaintext logs.
 cli_colors = false
