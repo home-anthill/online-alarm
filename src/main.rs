@@ -188,3 +188,7 @@ async fn main() -> Result<(), rocket::Error> {
     notification_handle.abort();
     Ok(())
 }
+
+// testing
+#[cfg(test)]
+mod tests_integration;

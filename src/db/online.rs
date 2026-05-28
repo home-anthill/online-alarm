@@ -126,3 +126,109 @@ pub fn get_date_field_by_name(value: &HashMap<String, String>, field_name: &str)
         None => Err(DbError::DbMissingFieldError(field_name.to_string())),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{filter_offline, filter_online, get_all_keys_pattern, get_date_field_by_name};
+    use crate::errors::db_error::DbError;
+    use crate::models::online::Online;
+    use pretty_assertions::assert_eq;
+
+    fn now_millis() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is before UNIX epoch")
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+    }
+
+    fn online(device_uuid: &str, feature_uuid: &str, modified_at: u64) -> Online {
+        Online {
+            api_token: format!("api-token-{device_uuid}"),
+            device_uuid: device_uuid.to_string(),
+            feature_uuid: feature_uuid.to_string(),
+            fcm_token: format!("fcm-token-{feature_uuid}"),
+            created_at: 1,
+            modified_at,
+        }
+    }
+
+    #[test_log::test]
+    fn get_all_keys_pattern_uses_test_prefix_only_in_testing() {
+        assert_eq!("test_*", get_all_keys_pattern(true));
+        assert_eq!("online_*", get_all_keys_pattern(false));
+    }
+
+    #[test_log::test]
+    fn get_date_field_by_name_parses_existing_numeric_field() {
+        let value = HashMap::from([("createdAt".to_string(), "1710000000123".to_string())]);
+
+        assert_eq!(1710000000123, get_date_field_by_name(&value, "createdAt").unwrap());
+    }
+
+    #[test_log::test]
+    fn get_date_field_by_name_reports_missing_field_name() {
+        let value = HashMap::new();
+
+        let err = get_date_field_by_name(&value, "modifiedAt").unwrap_err();
+
+        match err {
+            DbError::DbMissingFieldError(field_name) => assert_eq!("modifiedAt", field_name),
+            other => panic!("expected missing field error, got {other:?}"),
+        }
+    }
+
+    #[test_log::test]
+    fn get_date_field_by_name_reports_parse_error() {
+        let value = HashMap::from([("modifiedAt".to_string(), "not-a-number".to_string())]);
+
+        let err = get_date_field_by_name(&value, "modifiedAt").unwrap_err();
+
+        match err {
+            DbError::DbStrToNumError(_) => {}
+            other => panic!("expected parse error, got {other:?}"),
+        }
+    }
+
+    #[test_log::test]
+    fn filter_offline_returns_devices_older_than_timeout() {
+        let now = now_millis();
+        let devices =
+            vec![online("device-a", "feature-a", now.saturating_sub(120_000)), online("device-b", "feature-b", now)];
+
+        let offline = filter_offline(&devices, 60);
+
+        assert_eq!(vec!["device-a"], offline.iter().map(|device| device.device_uuid.as_str()).collect::<Vec<_>>());
+    }
+
+    #[test_log::test]
+    fn filter_offline_keeps_recent_devices_online() {
+        let now = now_millis();
+        let devices = vec![online("old", "feature-a", now.saturating_sub(120_000)), online("recent", "feature-b", now)];
+
+        let offline = filter_offline(&devices, 60);
+
+        assert_eq!(vec!["old"], offline.iter().map(|device| device.device_uuid.as_str()).collect::<Vec<_>>());
+    }
+
+    #[test_log::test]
+    fn filter_online_removes_only_matching_device_feature_pairs() {
+        let all = vec![
+            online("device-a", "feature-a", 1),
+            online("device-a", "feature-b", 1),
+            online("device-b", "feature-a", 1),
+        ];
+        let offline = vec![online("device-a", "feature-a", 1)];
+
+        let result = filter_online(&all, &offline);
+
+        assert_eq!(
+            vec![("device-a", "feature-b"), ("device-b", "feature-a")],
+            result.iter().map(|device| (device.device_uuid.as_str(), device.feature_uuid.as_str())).collect::<Vec<_>>()
+        );
+    }
+}

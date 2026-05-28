@@ -42,4 +42,29 @@ mod tests {
         let expected = topic.to_string();
         assert_eq!(format!("online/{}/features/{}", device_uuid, feature_uuid), expected);
     }
+
+    #[test_log::test]
+    fn check_topic_new_parses_family_device_and_feature() {
+        let topic = Topic::new("online/device-uuid/features/feature-uuid").unwrap();
+
+        assert_eq!("online", topic.family);
+        assert_eq!("device-uuid", topic.device_id);
+        assert_eq!("feature-uuid", topic.feature_name);
+    }
+
+    #[test_log::test]
+    fn check_topic_new_returns_none_when_device_is_missing() {
+        assert!(Topic::new("online").is_none());
+    }
+
+    #[test_log::test]
+    fn check_topic_display_uses_canonical_features_segment() {
+        let topic = Topic {
+            family: "test".to_string(),
+            device_id: "device-uuid".to_string(),
+            feature_name: "feature-uuid".to_string(),
+        };
+
+        assert_eq!("test/device-uuid/features/feature-uuid", topic.to_string());
+    }
 }
