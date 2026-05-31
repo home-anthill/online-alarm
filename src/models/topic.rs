@@ -13,13 +13,17 @@ pub struct Topic {
 impl Topic {
     pub fn new(topic: &str) -> Option<Self> {
         // topic form is:
-        //  online/device_uuid/features/device_uuid
+        //  online/device_uuid/features/feature_uuid
         let items: Vec<&str> = topic.split('/').collect();
-        Some(Self {
-            family: items.first()?.to_string(),
-            device_id: items.get(1)?.to_string(),
-            feature_name: items.last()?.to_string(),
-        })
+        if items.len() != 4
+            || items[0] != "online"
+            || items[2] != "features"
+            || items[1].is_empty()
+            || items[3].is_empty()
+        {
+            return None;
+        }
+        Some(Self { family: items[0].to_string(), device_id: items[1].to_string(), feature_name: items[3].to_string() })
     }
 }
 
@@ -55,6 +59,23 @@ mod tests {
     #[test_log::test]
     fn check_topic_new_returns_none_when_device_is_missing() {
         assert!(Topic::new("online").is_none());
+    }
+
+    #[test_log::test]
+    fn check_topic_new_returns_none_when_feature_segment_is_missing() {
+        assert!(Topic::new("online/device-uuid/feature-uuid").is_none());
+    }
+
+    #[test_log::test]
+    fn check_topic_new_returns_none_when_static_segments_are_invalid() {
+        assert!(Topic::new("offline/device-uuid/features/feature-uuid").is_none());
+        assert!(Topic::new("online/device-uuid/feature/feature-uuid").is_none());
+    }
+
+    #[test_log::test]
+    fn check_topic_new_returns_none_when_identifiers_are_empty() {
+        assert!(Topic::new("online//features/feature-uuid").is_none());
+        assert!(Topic::new("online/device-uuid/features/").is_none());
     }
 
     #[test_log::test]

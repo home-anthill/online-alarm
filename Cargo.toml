@@ -46,4 +46,4 @@ serde = { version = "^1.0.228", features = ["derive"] }
 [dev-dependencies]
 # better looking rust assertions
 pretty_assertions = "^1.4.1"
-test-log = {version = "^0.2.20", features = ["trace"]}
+test-log = {version = "^0.2.21", features = ["trace"]}

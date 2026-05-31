@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.0.1
+
+### Tests
+
+- Added error-case coverage for malformed MQTT topics:
+  - missing `features/{feature_uuid}` segment
+  - invalid static path segments
+  - empty device or feature identifiers
+- Added coverage for the JSON 404 catcher response.
+
+
 # 3.0.0
 
 ### Features

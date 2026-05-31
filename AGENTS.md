@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to coding agents when working with code in this repository.
 
 ## Project Overview
 
@@ -121,7 +121,7 @@ GitHub Actions workflow (`.github/workflows/docker-image.yml`):
 
 ## Recent Changes
 
-See `CHANGELOG_CLAUDE.md` for detailed security and idiomatic Rust improvements made in recent reviews. Key areas:
+See `CHANGELOG.md` for detailed security and idiomatic Rust improvements made in recent reviews. Key areas:
 - Credential redaction in logs and debug output (Redis URI, password)
 - URL-encoding of special characters in Redis credentials
 - Proper error handling for Redis SCAN failures and missing FCM tokens
