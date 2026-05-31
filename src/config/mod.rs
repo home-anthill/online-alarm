@@ -34,6 +34,7 @@ impl AppEnv {
 pub struct Env {
     pub log_level: Option<String>,
     pub redis_uri: String,
+    pub notifications_redis_uri: Option<String>,
     pub redis_username: String,
     pub redis_password: String,
     pub cache_timeout_seconds: u64,
@@ -44,9 +45,11 @@ pub struct Env {
 
 impl fmt::Debug for Env {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let notifications_redis_uri = self.notifications_redis_uri.as_deref().map(redact_redis_uri);
         f.debug_struct("Env")
             .field("log_level", &self.log_level)
             .field("redis_uri", &redact_redis_uri(&self.redis_uri))
+            .field("notifications_redis_uri", &notifications_redis_uri)
             .field("redis_username", &self.redis_username)
             .field("redis_password", &"***")
             .field("cache_timeout_seconds", &self.cache_timeout_seconds)
@@ -133,6 +136,11 @@ pub fn init() -> (Env, AppEnv) {
 fn print_env(env: &Env) {
     info!(target: "app", "log_level = {}", env.log_level.as_deref().unwrap_or("debug"));
     info!(target: "app", "redis_uri = {}", redact_redis_uri(&env.redis_uri));
+    info!(
+        target: "app",
+        "notifications_redis_uri = {}",
+        env.notifications_redis_uri.as_deref().map(redact_redis_uri).unwrap_or_else(|| "<REDIS_URI>".to_string())
+    );
     info!(target: "app", "redis_username = {}", env.redis_username);
     info!(target: "app", "redis_password = {}", !env.redis_password.is_empty());
     info!(target: "app", "cache_timeout_seconds = {}", env.cache_timeout_seconds);
@@ -165,6 +173,7 @@ mod tests {
         let env = Env {
             log_level: Some("INFO".to_string()),
             redis_uri: "redis://user:secret@localhost:6379/0".to_string(),
+            notifications_redis_uri: Some("redis://user:secret@localhost:6379/1".to_string()),
             redis_username: "redis-user".to_string(),
             redis_password: "redis-password".to_string(),
             cache_timeout_seconds: 30,
@@ -176,6 +185,7 @@ mod tests {
 
         assert!(output.contains("log_level: Some(\"INFO\")"));
         assert!(output.contains("redis_uri: \"redis://***@localhost:6379/0\""));
+        assert!(output.contains("notifications_redis_uri: Some(\"redis://***@localhost:6379/1\")"));
         assert!(output.contains("redis_username: \"redis-user\""));
         assert!(output.contains("redis_password: \"***\""));
         assert!(output.contains("cache_timeout_seconds: 30"));

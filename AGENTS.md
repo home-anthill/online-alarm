@@ -13,7 +13,7 @@ All commands use the Makefile:
 - `make build` — format, lint (clippy), and build (default target)
 - `make release` — production build with optimizations
 - `make run` — hot-reload development server via cargo-watch
-- `make test` — run all tests (single-threaded, with backtrace)
+- `make test` — run all tests (single-threaded, with backtrace); Redis is expected to already be running on localhost
 - `make test-coverage` — generate HTML/LCOV coverage reports via grcov
 - `make check` — run `cargo audit` to find known vulnerabilities
 - `make fmt` — format code with `cargo fmt`
@@ -26,7 +26,7 @@ Run a single test:
 ENV=testing RUST_BACKTRACE=full cargo test <test_name> -- --nocapture --test-threads 1
 ```
 
-**Tests**: The codebase has **unit tests only** (in `src/models/topic.rs`) that test parsing and model logic. No external infrastructure (Redis, FCM, etc.) is required — `ENV=testing` just switches the Redis key pattern for integration tests if they were added. Tests run single-threaded to ensure deterministic behavior.
+**Tests**: Always run the full test suite with `make test` unless the user explicitly asks for a narrower test run. Tests must not be marked `#[ignore]`; Redis-backed tests are part of the normal suite. Assume Redis is already running on `localhost:6379`; do not skip tests on the assumption that external infrastructure is unavailable. `ENV=testing` switches Redis key patterns to `test_*`. Tests run single-threaded to ensure deterministic behavior.
 
 ## Architecture
 

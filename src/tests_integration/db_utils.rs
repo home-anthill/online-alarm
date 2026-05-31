@@ -1,9 +1,26 @@
+use std::time::Duration;
+
 use futures::StreamExt;
 use redis::AsyncCommands;
 
+const TEST_REDIS_URI: &str = "redis://localhost:6379/15";
+
+pub async fn redis_connection() -> redis::aio::ConnectionManager {
+    let client = redis::Client::open(TEST_REDIS_URI).expect("valid default redis test url");
+    tokio::time::timeout(Duration::from_secs(2), client.get_connection_manager())
+        .await
+        .unwrap_or_else(|_| panic!("timed out connecting to Redis at {TEST_REDIS_URI}"))
+        .unwrap_or_else(|_| panic!("connect to Redis at {TEST_REDIS_URI}"))
+}
+
 pub async fn clean_test_keys(con: &mut redis::aio::ConnectionManager) {
-    let iter = con.scan_match::<&str, String>("test_*").await.expect("scan test keys");
-    let keys = iter.map(|result| result.expect("read test key")).collect::<Vec<_>>().await;
+    let mut keys = vec![];
+
+    for pattern in ["test_*", "notification:test-*", "notifications:by_api_token:test-*"] {
+        let iter = con.scan_match::<&str, String>(pattern).await.expect("scan test keys");
+        keys.extend(iter.map(|result| result.expect("read test key")).collect::<Vec<_>>().await);
+    }
+
     if !keys.is_empty() {
         let _: () = con.del(keys).await.expect("delete test keys");
     }

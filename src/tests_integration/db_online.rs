@@ -1,18 +1,8 @@
-use std::time::Duration;
-
 use pretty_assertions::assert_eq;
 use redis::AsyncCommands;
 
-use super::db_utils::{clean_test_keys, hset_multiple};
+use super::db_utils::{clean_test_keys, hset_multiple, redis_connection};
 use online::db::online::find_all;
-
-async fn redis_connection() -> redis::aio::ConnectionManager {
-    let client = redis::Client::open("redis://localhost:6379/15").expect("valid default redis test url");
-    tokio::time::timeout(Duration::from_secs(2), client.get_connection_manager())
-        .await
-        .expect("timed out connecting to Redis at redis://localhost:6379/15")
-        .expect("connect to Redis at redis://localhost:6379/15")
-}
 
 #[tokio::test]
 async fn find_all_reads_valid_testing_hashes_and_skips_invalid_redis_entries() {
