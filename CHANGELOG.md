@@ -5,7 +5,10 @@
 ### Features
 
 - Grouped due offline devices by FCM token so each recipient gets a single notification for multiple offline devices.
-- Persisted sent notification metadata in Redis, including affected devices, API tokens, provider message ID, and 90-day retention cleanup.
+- Added singular/plural notification bodies so grouped alerts report the number of offline devices.
+- Persisted sent notification metadata in Redis, including affected devices, API tokens, provider message ID, and sent timestamp.
+- Added per-API-token Redis indexes for notification history lookup.
+- Added automatic 90-day retention cleanup for stored notification history and API-token indexes.
 - Added optional `NOTIFICATIONS_REDIS_URI` support for storing notification history separately from online-status data.
 
 ### Tests
