@@ -66,6 +66,7 @@ pub async fn find_all(db: &ConnectionManager, is_testing: bool) -> Result<Vec<On
                 continue;
             }
         };
+        let notification_silenced = value.get("notificationSilenced").map(|val| val == "true").unwrap_or(false);
 
         let created_at = match get_date_field_by_name(&value, "createdAt") {
             Ok(val) => val,
@@ -87,6 +88,7 @@ pub async fn find_all(db: &ConnectionManager, is_testing: bool) -> Result<Vec<On
             device_uuid: device_uuid.to_string(),
             feature_uuid: feature_uuid.to_string(),
             fcm_token: fcm_token.to_string(),
+            notification_silenced,
             created_at,
             modified_at,
         });
@@ -152,6 +154,7 @@ mod tests {
             device_uuid: device_uuid.to_string(),
             feature_uuid: feature_uuid.to_string(),
             fcm_token: format!("fcm-token-{feature_uuid}"),
+            notification_silenced: false,
             created_at: 1,
             modified_at,
         }

@@ -150,6 +150,7 @@ mod tests {
             device_uuid: device_uuid.to_string(),
             feature_uuid: feature_uuid.to_string(),
             fcm_token: "fcm-token".to_string(),
+            notification_silenced: false,
             created_at: 1,
             modified_at: 2,
         }

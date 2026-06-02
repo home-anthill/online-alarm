@@ -5,6 +5,7 @@
 ### Features
 
 - Grouped due offline devices by FCM token so each recipient gets a single notification for multiple offline devices.
+- Skipped offline push notifications for Redis online records with `notificationSilenced=true`.
 - Added singular/plural notification bodies so grouped alerts report the number of offline devices.
 - Persisted sent notification metadata in Redis, including affected devices, API tokens, provider message ID, and sent timestamp.
 - Added per-API-token Redis indexes for notification history lookup.
@@ -18,6 +19,7 @@
   - invalid static path segments
   - empty device or feature identifiers
 - Added coverage for the JSON 404 catcher response.
+- Added unit coverage for silenced offline devices being omitted from notification batches.
 
 
 # 3.0.0

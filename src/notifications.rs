@@ -22,6 +22,11 @@ pub fn collect_due_offline_notifications(
 
     for offline in offline_devices {
         let key = offline.cache_key();
+        if offline.notification_silenced {
+            debug!(target: "app", "offline device key={} has notifications silenced", &key);
+            cache.remove(&key);
+            continue;
+        }
 
         match cache.get(&key) {
             None => {
@@ -68,6 +73,7 @@ mod tests {
             device_uuid: device_uuid.to_string(),
             feature_uuid: feature_uuid.to_string(),
             fcm_token: fcm_token.to_string(),
+            notification_silenced: false,
             created_at: 1,
             modified_at: 2,
         }
@@ -86,6 +92,7 @@ mod tests {
             device_uuid: device_uuid.to_string(),
             feature_uuid: feature_uuid.to_string(),
             fcm_token: fcm_token.to_string(),
+            notification_silenced: false,
             created_at,
             modified_at,
         }
@@ -222,6 +229,19 @@ mod tests {
             collect_due_offline_notifications(&cache, vec![online("device-a", "feature-a", "token-1")], 10_000, 5);
 
         assert!(batches.is_empty());
+    }
+
+    #[test]
+    fn collect_due_offline_notifications_skips_silenced_devices() {
+        let cache = DashMap::new();
+        cache.insert("device-a-feature-a".to_string(), 1);
+        let mut device = online("device-a", "feature-a", "token-1");
+        device.notification_silenced = true;
+
+        let batches = collect_due_offline_notifications(&cache, vec![device], 10_000, 5);
+
+        assert!(batches.is_empty());
+        assert!(!cache.contains_key("device-a-feature-a"));
     }
 
     #[test]

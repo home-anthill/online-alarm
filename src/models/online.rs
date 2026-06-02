@@ -4,6 +4,7 @@ pub struct Online {
     pub device_uuid: String,
     pub feature_uuid: String,
     pub fcm_token: String,
+    pub notification_silenced: bool,
     pub created_at: u64,
     pub modified_at: u64,
 }
@@ -25,6 +26,7 @@ mod tests {
             device_uuid: device_uuid.to_string(),
             feature_uuid: feature_uuid.to_string(),
             fcm_token: "fcm-token".to_string(),
+            notification_silenced: false,
             created_at: 1,
             modified_at: 2,
         }

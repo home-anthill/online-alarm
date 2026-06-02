@@ -17,6 +17,7 @@ fn online(api_token: &str, device_uuid: &str, feature_uuid: &str) -> Online {
         device_uuid: device_uuid.to_string(),
         feature_uuid: feature_uuid.to_string(),
         fcm_token: "fcm-token".to_string(),
+        notification_silenced: false,
         created_at: 1710000000001,
         modified_at: 1710000000002,
     }
