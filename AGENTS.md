@@ -32,25 +32,35 @@ ENV=testing RUST_BACKTRACE=full cargo test <test_name> -- --nocapture --test-thr
 
 **Main flow** (`src/main.rs`):
 1. Initializes logging (rolling file appenders split by level) and loads env config
-2. Connects to Redis (`redis_client`) and initializes FCM hub (`fcm_hub`) via `google-fcm1`
-3. Creates a `DashMap` cache for notification deduplication (tracks recently-sent device notifications with configurable TTL)
-4. Spawns a background tokio task (`notification_handle`) that:
+2. Connects to the online-status Redis database (`redis_client`)
+3. Connects to the notifications Redis database. This uses `NOTIFICATIONS_REDIS_URI` when configured, otherwise it reuses `REDIS_URI`.
+4. Initializes the FCM hub (`fcm_hub`) via `google-fcm1`
+5. Creates a `DashMap` cache for notification deduplication (tracks recently-sent device notifications with configurable TTL)
+6. Spawns a background tokio task (`notification_handle`) that:
    - Polls Redis every 10 seconds for all devices
-   - Detects devices whose `modifiedAt` timestamp exceeds the offline threshold (`OFFLINE_TIMEOUT_SECONDS`)
-   - Sends FCM notifications only for devices not in the deduplication cache
+   - Detects devices whose `modifiedAt` timestamp exceeds the offline threshold (`OFFLINE_TIMEOUT_SECONDS`) and whose `notificationSilenced` flag is not `true`
+   - Groups due offline devices by `fcmToken`, so each recipient receives one notification for all currently due offline device features
+   - Uses singular/plural notification bodies based on the grouped device count
+   - Sends FCM notifications only for device features whose cache entry has expired
    - Updates the cache to prevent duplicate notifications within the timeout window
+   - Persists sent-notification metadata to Redis after successful FCM sends
    - Logs and continues on per-device errors (missing FCM tokens, transient Redis failures)
 
    The `JoinHandle` is stored and `abort()`ed when Rocket shuts down to ensure clean shutdown.
-5. Starts the Rocket HTTP server
+7. Starts the Rocket HTTP server
 
-**Deduplication mechanism**: A `DashMap<String, u64>` cache stores `cache_key()` → `timestamp` entries for recently-notified devices. When an offline device is detected, the cache is checked; if the device key exists and was inserted less than `CACHE_TIMEOUT_SECONDS` ago, the notification is skipped (preventing FCM spam for a device stuck offline). Cache entries are not explicitly expired; stale entries stay in memory until the next poll encounters the same device and sees its timestamp. This is acceptable because: (1) devices eventually come back online (cache key is never checked again), and (2) the DashMap is small (typically <1000 entries) relative to typical device counts.
+**Deduplication mechanism**: A `DashMap<String, u64>` cache stores `cache_key()` → `timestamp` entries for offline device features. On first offline detection, the device feature is cached but not notified. If it remains offline after `CACHE_TIMEOUT_SECONDS`, it is included in the next grouped notification for its `fcmToken`, and the cache timestamp is renewed after the send attempt. Device features that become online or are silenced are removed from the cache because `filter_online` treats all records excluded from the offline list as online for cache cleanup. Cache entries are not explicitly expired; stale entries stay in memory until the next poll encounters the same device feature and evaluates its timestamp. This is acceptable because: (1) devices usually come back online or are silenced, and (2) the DashMap is small (typically <1000 entries) relative to typical device counts.
+
+**Notification history**: Successful FCM sends are persisted to Redis by `db::notification::save_sent_notification`. The main notification hash key is `notification:{id}` where `id` is `{sent_at_millis}-{sequence}`. Stored hash fields include `id`, `apiToken` (first affected token for compatibility), `apiTokens` (JSON array of all affected API tokens), `sentAt`, `title`, `body`, `deviceCount`, `devices` (JSON array of affected device/feature UUIDs and timestamps), `provider` (`fcm`), and `providerMessageId`. A Redis sorted-set index is also maintained per API token at `notifications:by_api_token:{api_token}` with `sentAt` as the score. Each save cleans notification hashes and index entries older than `NOTIFICATION_RETENTION_MILLIS` (90 days) for the affected API-token indexes.
 
 **Module structure**:
-- `config/` — logging setup, env var loading (`REDIS_URI`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `CACHE_TIMEOUT_SECONDS`, `OFFLINE_TIMEOUT_SECONDS`, `FCM_SERVICE_ACCOUNT_KEY_PATH`). Logging uses rolling file appenders (daily rotation, 5 files max): `info*.log` for INFO and below (no target filter — includes all crates), `error*.log` for ERROR only (filtered to `target: "app"`), stdout also filtered to `target: "app"`. `set_global_default` is used instead of `.init()` intentionally so Rocket can install its own `RocketLogger` for startup output. An invalid `LOG_LEVEL` value is reported via `eprintln!` before the subscriber is installed (tracing is not yet available at that point), then falls back to `DEBUG`. Redis credentials are redacted in logs and debug output to prevent accidental exposure.
+- `config/` — logging setup, env var loading (`REDIS_URI`, `NOTIFICATIONS_REDIS_URI`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `CACHE_TIMEOUT_SECONDS`, `OFFLINE_TIMEOUT_SECONDS`, `FCM_SERVICE_ACCOUNT_KEY_PATH`). Logging uses rolling file appenders (daily rotation, 5 files max): `info*.log` for INFO and below (no target filter — includes all crates), `error*.log` for ERROR only (filtered to `target: "app"`), stdout also filtered to `target: "app"`. `set_global_default` is used instead of `.init()` intentionally so Rocket can install its own `RocketLogger` for startup output. An invalid `LOG_LEVEL` value is reported via `eprintln!` before the subscriber is installed (tracing is not yet available at that point), then falls back to `DEBUG`. Redis credentials are redacted in logs and debug output to prevent accidental exposure.
 - `routes/` — single REST endpoint: `GET /keepalive` (health check for Kubernetes probes)
-- `models/` — `Online` (device status with `device_uuid`, `feature_uuid`, `api_token`, `fcm_token`; `created_at`/`modified_at` are `u64` millisecond epoch timestamps; `cache_key()` → `"{device_uuid}-{feature_uuid}"`), `Topic` (MQTT topic parser: `online/{device_uuid}/features/{feature_uuid}`). `Online` is constructed directly from Redis hash fields with no serde derives.
-- `db/` — Redis operations: `find_all` scans `online_*` keys (or `test_*` when `ENV=testing`). Redis hash fields per key: `apiToken`, `fcmToken`, `createdAt`, `modifiedAt` (millisecond epoch timestamps stored as decimal strings). SCAN iteration errors and per-key `HGETALL` errors are logged and skipped per-device (not propagated). `filter_offline` compares `modified_at` (u64) directly against the computed threshold. `filter_online` uses a zero-allocation `HashSet<(&str, &str)>` of `(device_uuid, feature_uuid)` string-slice pairs for efficient dedup during update.
+- `models/` — `Online` (device status with `device_uuid`, `feature_uuid`, `api_token`, `fcm_token`, `notification_silenced`; `created_at`/`modified_at` are `u64` millisecond epoch timestamps; `cache_key()` → `"{device_uuid}-{feature_uuid}"`), `Topic` (MQTT topic parser: `online/{device_uuid}/features/{feature_uuid}`). `Online` is constructed directly from Redis hash fields with no serde derives.
+- `db/` — Redis operations:
+  - `online` scans `online_*` keys (or `test_*` when `ENV=testing`). Redis hash fields per key: `apiToken`, `fcmToken`, `notificationSilenced`, `createdAt`, `modifiedAt` (millisecond epoch timestamps stored as decimal strings). `notificationSilenced` defaults to `false` when missing and only the string value `true` silences a record. SCAN iteration errors and per-key `HGETALL` errors are logged and skipped per-device (not propagated). `filter_offline` compares `modified_at` (u64) directly against the computed threshold and excludes silenced records. `filter_online` uses a zero-allocation `HashSet<(&str, &str)>` of `(device_uuid, feature_uuid)` string-slice pairs for efficient dedup during update.
+  - `notification` persists sent FCM notification history, maintains per-API-token sorted-set indexes, and performs 90-day retention cleanup during saves.
+- `notifications.rs` — groups due offline device features by FCM token, applies cache-based notification deduplication, and builds singular/plural notification bodies.
 - `errors/` — custom error types (`DbError`, `RedisError`, `ApiError`) implementing Rocket's `Responder`; error variants wrap their source errors via `#[source]`
 - `catchers/` — HTTP error handlers (400, 404, 500, 503)
 
@@ -83,8 +93,8 @@ Before running the service locally:
 ## Configuration
 
 - **Rocket.toml**: Debug port 8088 (localhost), Release port 80 (0.0.0.0). **Note:** Redis, environment, and secrets are not configured here — all come from `.env` and runtime env vars. `secret_key` is **not** stored in the file; set `ROCKET_SECRET_KEY` env var at runtime (`openssl rand -base64 32`).
-- **Environment**: Copy `.env_template` to `.env` for local dev. Required vars: `REDIS_URI`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `CACHE_TIMEOUT_SECONDS`, `OFFLINE_TIMEOUT_SECONDS`, `FCM_SERVICE_ACCOUNT_KEY_PATH`, `ROCKET_SECRET_KEY`. Optional: `LOG_LEVEL` (default: `debug`).
-- **Redis URI**: Supports both `redis://` and `rediss://` (TLS). When `REDIS_PASSWORD` is set, credentials are injected as `scheme://username:password@host:port` using percent-encoding via the `urlencoding` crate. Special characters in username/password are URL-encoded to prevent URI corruption. If `REDIS_USERNAME` is set but `REDIS_PASSWORD` is empty, a warning is logged and no authentication is attempted.
+- **Environment**: Copy `.env_template` to `.env` for local dev. Required vars: `REDIS_URI`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `CACHE_TIMEOUT_SECONDS`, `OFFLINE_TIMEOUT_SECONDS`, `FCM_SERVICE_ACCOUNT_KEY_PATH`, `ROCKET_SECRET_KEY`. Optional: `NOTIFICATIONS_REDIS_URI` (defaults to `REDIS_URI`) and `LOG_LEVEL` (default: `debug`).
+- **Redis URI**: Supports both `redis://` and `rediss://` (TLS). When `REDIS_PASSWORD` is set, credentials are injected as `scheme://username:password@host:port` using percent-encoding via the `urlencoding` crate. Special characters in username/password are URL-encoded to prevent URI corruption. If `REDIS_USERNAME` is set but `REDIS_PASSWORD` is empty, a warning is logged and no authentication is attempted. The same credential-injection behavior is used for `NOTIFICATIONS_REDIS_URI` when present.
 - **FCM credentials**: Path to `serviceAccountKey.json` is set via `FCM_SERVICE_ACCOUNT_KEY_PATH` (defaults to `./serviceAccountKey.json`). Must be injected at runtime — not baked into the Docker image.
 - **Rust edition**: 2024; release profile uses LTO, opt-level 3, panic=abort
 - **Formatting**: `rustfmt.toml` — 4 spaces, max width 120
@@ -95,8 +105,10 @@ The notification loop prioritizes resilience over consistency. When processing a
 
 - **Per-device errors are logged and skipped**, not propagated to abort the entire operation. Examples:
   - Missing or empty FCM token for a device: log warning, skip notification for that device, continue to next device
+  - `notificationSilenced=true` for a device feature: omit it from offline notification batches and clean its cache entry
   - HGETALL failure on a Redis key: log error, skip that device, continue scanning
   - Transient FCM API failures: log error, skip notification for that device (next poll will retry)
+  - Notification-history persistence failures after successful FCM sends: log error, continue the loop
 
 - **SCAN errors during Redis key iteration**: logged but don't prevent processing of keys that were successfully fetched
 
@@ -111,6 +123,7 @@ This design ensures one misbehaving device or transient Redis issue doesn't disa
 | `ROCKET_SECRET_KEY` | `openssl rand -base64 32` → env var |
 | `FCM_SERVICE_ACCOUNT_KEY_PATH` | Mount file via Docker volume / secret |
 | `REDIS_URI` | Env var; credentials in URI are redacted in logs |
+| `NOTIFICATIONS_REDIS_URI` | Optional env var for separate notification history storage; credentials are redacted in logs |
 
 ## CI/CD
 
@@ -121,9 +134,10 @@ GitHub Actions workflow (`.github/workflows/docker-image.yml`):
 
 ## Recent Changes
 
-See `CHANGELOG.md` for detailed security and idiomatic Rust improvements made in recent reviews. Key areas:
-- Credential redaction in logs and debug output (Redis URI, password)
-- URL-encoding of special characters in Redis credentials
-- Proper error handling for Redis SCAN failures and missing FCM tokens
-- Support for TLS Redis URIs (`rediss://`)
-- Removal of dead MQTT messaging code and unused imports
+See `CHANGELOG.md` for detailed release notes. Version 4.0.0 added:
+- Grouped offline-device notifications by FCM token, including singular/plural notification bodies.
+- `notificationSilenced=true` support for suppressing offline notifications per Redis online record.
+- Redis-backed sent-notification history with affected devices, API tokens, FCM provider message ID, and sent timestamp.
+- Per-API-token notification-history indexes and automatic 90-day retention cleanup.
+- Optional `NOTIFICATIONS_REDIS_URI` for storing notification history separately from online-status data.
+- Additional tests for malformed MQTT topics, JSON 404 catcher responses, and silenced offline devices.

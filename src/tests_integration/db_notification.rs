@@ -6,7 +6,7 @@ use serde_json::json;
 
 use super::db_utils::{clean_test_keys, redis_connection};
 use online::db::notification::{
-    NOTIFICATION_RETENTION_MILLIS, SentNotification, notification_key, notifications_by_api_token_key,
+    NOTIFICATION_RETENTION_MILLIS, SentNotification, get_notification_key, get_notifications_by_api_token_key,
     save_sent_notification,
 };
 use online::models::online::Online;
@@ -43,13 +43,13 @@ async fn save_sent_notification_writes_hash_and_api_token_index() {
     save_sent_notification(&con, &notification).await.expect("save sent notification");
 
     let hash: HashMap<String, String> =
-        con.hgetall(notification_key("test-notification-a")).await.expect("read notification hash");
+        con.hgetall(get_notification_key("test-notification-a")).await.expect("read notification hash");
     let indexed_ids: Vec<String> = con
-        .zrevrange(notifications_by_api_token_key("test-api-token-a"), 0, -1)
+        .zrevrange(get_notifications_by_api_token_key("test-api-token-a"), 0, -1)
         .await
         .expect("read notification index");
     let score: f64 = con
-        .zscore(notifications_by_api_token_key("test-api-token-a"), "test-notification-a")
+        .zscore(get_notifications_by_api_token_key("test-api-token-a"), "test-notification-a")
         .await
         .expect("read notification score");
 
@@ -100,15 +100,15 @@ async fn save_sent_notification_indexes_all_api_tokens_in_grouped_notification()
     save_sent_notification(&con, &notification).await.expect("save sent notification");
 
     let token_a_ids: Vec<String> = con
-        .zrevrange(notifications_by_api_token_key("test-api-token-a"), 0, -1)
+        .zrevrange(get_notifications_by_api_token_key("test-api-token-a"), 0, -1)
         .await
         .expect("read token a notification index");
     let token_b_ids: Vec<String> = con
-        .zrevrange(notifications_by_api_token_key("test-api-token-b"), 0, -1)
+        .zrevrange(get_notifications_by_api_token_key("test-api-token-b"), 0, -1)
         .await
         .expect("read token b notification index");
     let hash: HashMap<String, String> =
-        con.hgetall(notification_key("test-notification-grouped")).await.expect("read notification hash");
+        con.hgetall(get_notification_key("test-notification-grouped")).await.expect("read notification hash");
 
     clean_test_keys(&mut con).await;
 
@@ -129,18 +129,18 @@ async fn save_sent_notification_removes_notifications_older_than_ninety_days() {
     let current_sent_at = NOTIFICATION_RETENTION_MILLIS + 10_000;
     let expired_sent_at = 9_999;
     let retained_sent_at = 10_000;
-    let index_key = notifications_by_api_token_key(api_token);
+    let index_key = get_notifications_by_api_token_key(api_token);
 
     let _: () = con
         .hset_multiple(
-            notification_key("test-expired-notification"),
+            get_notification_key("test-expired-notification"),
             &[("id", "test-expired-notification"), ("body", "expired")],
         )
         .await
         .expect("seed expired notification hash");
     let _: () = con
         .hset_multiple(
-            notification_key("test-retained-notification"),
+            get_notification_key("test-retained-notification"),
             &[("id", "test-retained-notification"), ("body", "retained")],
         )
         .await
@@ -170,11 +170,11 @@ async fn save_sent_notification_removes_notifications_older_than_ninety_days() {
 
     let ids: Vec<String> = con.zrange(&index_key, 0, -1).await.expect("read notification index");
     let expired_exists: bool =
-        con.exists(notification_key("test-expired-notification")).await.expect("check expired notification hash");
+        con.exists(get_notification_key("test-expired-notification")).await.expect("check expired notification hash");
     let retained_exists: bool =
-        con.exists(notification_key("test-retained-notification")).await.expect("check retained notification hash");
+        con.exists(get_notification_key("test-retained-notification")).await.expect("check retained notification hash");
     let current_exists: bool =
-        con.exists(notification_key("test-current-notification")).await.expect("check current notification hash");
+        con.exists(get_notification_key("test-current-notification")).await.expect("check current notification hash");
 
     clean_test_keys(&mut con).await;
 

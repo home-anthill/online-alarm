@@ -13,10 +13,10 @@ use tracing::{debug, error, info, warn};
 use online::catchers as app_catchers;
 use online::config::{AppEnv, Env, init};
 use online::db::notification::{
-    SentNotification, api_tokens_for_devices, next_notification_id, save_sent_notification,
+    SentNotification, api_tokens_for_devices_features, get_next_notification_id, save_sent_notification,
 };
 use online::db::online::{filter_offline, filter_online, find_all};
-use online::notifications::{collect_due_offline_notifications, offline_notification_body};
+use online::notifications::{build_offline_by_fcm_token_map, offline_notification_body};
 use online::routes as app_routes;
 
 #[rocket::main]
@@ -83,48 +83,55 @@ async fn main() -> Result<(), rocket::Error> {
     // It's used to store UUIDs as keys and insertion date as value to prevent too many notifications
     let cache: DashMap<String, u64> = DashMap::new();
 
-    // 5. send notifications for all offline devices
-    let notification_handle = tokio::task::spawn(async move {
+    // 5. spawn a tokio task to loop infinitely to
+    // read/write db and cache to send notifications
+    let notification_loop_task = tokio::task::spawn(async move {
+        // infinite loop
         loop {
-            // read all elements
+            // read all online device features hash tables from Redis with key format 'online_<deviceUuid>_feature_<featureUuid>'
             // TODO this is bad, because I have to improve logic to clean old devices from redis and so on
-            let all_devices = match find_all(&con, is_testing).await {
-                Ok(devices) => devices,
+            let all_devices_features = match find_all(&con, is_testing).await {
+                Ok(device_feature) => device_feature,
                 Err(err) => {
                     error!(target: "app", "cannot find all elements in db, err = {:?}", err);
                     tokio::time::sleep(Duration::from_secs(10)).await;
                     continue;
                 }
             };
-            let offline_devices = filter_offline(&all_devices, offline_timeout_seconds);
-            let online_devices = filter_online(&all_devices, &offline_devices);
+            // offline_devices_features are all devices features that are offline and NOT silenced
+            let offline_devices_features = filter_offline(&all_devices_features, offline_timeout_seconds);
+            // online_devices_features are all devices features that are not in the offline list above
+            let online_devices_features = filter_online(&all_devices_features, &offline_devices_features);
 
-            // clean from cache all devices that become online
-            for online in online_devices {
-                let key = online.cache_key();
+            // clean from cache all devices features that become online or silenced
+            for online_device_feature in online_devices_features {
+                let key = online_device_feature.cache_key();
                 if cache.remove(&key).is_some() {
-                    info!(target: "app", "cleaned online device key={} from cache", &key);
+                    debug!(target: "info", "[CACHE] cleaned online device feature key={} from cache", &key);
                 }
             }
 
-            // process all offline devices
+            // print all offline devices features that are offline and NOT silenced
+            for offline_device_feature in &offline_devices_features {
+                let key = offline_device_feature.cache_key();
+                debug!(target: "app", "[CACHE] offline device feature key={} (created_at={}, modified_at={})",
+                    &key,
+                    &offline_device_feature.created_at,
+                    &offline_device_feature.modified_at
+                );
+            }
+
             let curr_date: u64 = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("system clock is before UNIX epoch")
                 .as_millis()
                 .try_into()
                 .unwrap_or(u64::MAX);
+            let offline_map =
+                build_offline_by_fcm_token_map(&cache, offline_devices_features, curr_date, cache_timeout_seconds);
 
-            for offline in &offline_devices {
-                let key = offline.cache_key();
-                debug!(target: "app", "offline device key={} (created_at={}, modified_at={})", &key, &offline.created_at, &offline.modified_at);
-            }
-
-            let notification_batches =
-                collect_due_offline_notifications(&cache, offline_devices, curr_date, cache_timeout_seconds);
-
-            for batch in notification_batches {
-                let device_count = batch.devices.len();
+            for (key, value) in &offline_map {
+                let device_count = value.len();
                 let title = "home anthill".to_string();
                 let body = offline_notification_body(device_count);
                 warn!(
@@ -134,7 +141,7 @@ async fn main() -> Result<(), rocket::Error> {
                 );
                 let req = SendMessageRequest {
                     message: Some(Message {
-                        token: Some(batch.fcm_token.clone()),
+                        token: Some(key.clone()),
                         notification: Some(Notification {
                             title: Some(title.clone()),
                             body: Some(body.clone()),
@@ -148,16 +155,17 @@ async fn main() -> Result<(), rocket::Error> {
                 match fcm_hub.projects().messages_send(req, &parent).doit().await {
                     Ok((_resp, msg)) => {
                         debug!(target: "app", "FCM response = {:?}", &msg);
-                        let notification_id = next_notification_id(curr_date);
-                        let api_tokens = api_tokens_for_devices(&batch.devices);
+                        let notification_id = get_next_notification_id(curr_date);
+                        let api_tokens = api_tokens_for_devices_features(value);
 
+                        // save notifications sent via FCM to Redis to create a history
                         let sent_notification = SentNotification {
                             id: &notification_id,
                             api_tokens: &api_tokens,
                             sent_at: curr_date,
                             title: &title,
                             body: &body,
-                            devices: &batch.devices,
+                            devices: value,
                             provider_message_id: msg.name.as_deref(),
                         };
 
@@ -169,10 +177,11 @@ async fn main() -> Result<(), rocket::Error> {
                         error!(target: "app", "cannot send message to FCM, err = {:?}", err);
                     }
                 }
-                for offline in batch.devices {
+
+                // renew cache with a new date (insert overwrites existing entry)
+                for offline in value {
                     let key = offline.cache_key();
-                    // renew cache with a new date (insert overwrites existing entry)
-                    warn!(target: "app", "re-adding offline device key={} to cache", &key);
+                    warn!(target: "app", "[CACHE] re-adding offline device key={} to cache", &key);
                     cache.insert(key, curr_date);
                 }
             }
@@ -196,7 +205,7 @@ async fn main() -> Result<(), rocket::Error> {
         .launch()
         .await?;
 
-    notification_handle.abort();
+    notification_loop_task.abort();
     Ok(())
 }
 

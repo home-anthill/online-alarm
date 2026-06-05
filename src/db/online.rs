@@ -96,6 +96,7 @@ pub async fn find_all(db: &ConnectionManager, is_testing: bool) -> Result<Vec<On
     Ok(elements)
 }
 
+// filter offline devices features, ignoring a device if it has notification_silenced = true
 pub fn filter_offline(all: &[Online], offline_timeout_seconds: u64) -> Vec<Online> {
     let curr_date: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -104,11 +105,15 @@ pub fn filter_offline(all: &[Online], offline_timeout_seconds: u64) -> Vec<Onlin
         .try_into()
         .unwrap_or(u64::MAX);
     all.iter()
-        .filter(|el| el.modified_at < curr_date.saturating_sub(offline_timeout_seconds.saturating_mul(1000)))
+        .filter(|el| {
+            el.modified_at < curr_date.saturating_sub(offline_timeout_seconds.saturating_mul(1000))
+                && !el.notification_silenced
+        })
         .cloned()
         .collect()
 }
 
+// filter online devices features (all that are not in offline list)
 pub fn filter_online(all: &[Online], offline: &[Online]) -> Vec<Online> {
     let offline_keys: HashSet<(&str, &str)> =
         offline.iter().map(|el| (el.device_uuid.as_str(), el.feature_uuid.as_str())).collect();
