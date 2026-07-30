@@ -5,21 +5,20 @@ use redis::AsyncCommands;
 use serde_json::json;
 
 use super::db_utils::{clean_test_keys, redis_connection};
-use online::db::notification::{
+use alarm_notifier::db::notification::{
     NOTIFICATION_RETENTION_MILLIS, SentNotification, get_notification_key, get_notifications_by_api_token_key,
     save_sent_notification,
 };
-use online::models::online::Online;
+use alarm_notifier::models::notification::NotificationDevice;
 
-fn online(api_token: &str, device_uuid: &str, feature_uuid: &str) -> Online {
-    Online {
+fn device(api_token: &str, device_uuid: &str, feature_uuid: &str) -> NotificationDevice {
+    NotificationDevice {
         api_token: api_token.to_string(),
         device_uuid: device_uuid.to_string(),
         feature_uuid: feature_uuid.to_string(),
-        fcm_token: "fcm-token".to_string(),
-        notification_silenced: false,
         created_at: 1710000000001,
         modified_at: 1710000000002,
+        alarm_type: None,
     }
 }
 
@@ -29,7 +28,7 @@ async fn save_sent_notification_writes_hash_and_api_token_index() {
     clean_test_keys(&mut con).await;
 
     let api_tokens = vec!["test-api-token-a".to_string()];
-    let devices = vec![online("test-api-token-a", "device-a", "feature-a")];
+    let devices = vec![device("test-api-token-a", "device-a", "feature-a")];
     let notification = SentNotification {
         id: "test-notification-a",
         api_tokens: &api_tokens,
@@ -86,7 +85,7 @@ async fn save_sent_notification_indexes_all_api_tokens_in_grouped_notification()
 
     let api_tokens = vec!["test-api-token-a".to_string(), "test-api-token-b".to_string()];
     let devices =
-        vec![online("test-api-token-a", "device-a", "feature-a"), online("test-api-token-b", "device-b", "feature-b")];
+        vec![device("test-api-token-a", "device-a", "feature-a"), device("test-api-token-b", "device-b", "feature-b")];
     let notification = SentNotification {
         id: "test-notification-grouped",
         api_tokens: &api_tokens,
@@ -155,7 +154,7 @@ async fn save_sent_notification_removes_notifications_older_than_ninety_days() {
         .expect("seed retained notification index");
 
     let api_tokens = vec![api_token.to_string()];
-    let devices = vec![online(api_token, "device-a", "feature-a")];
+    let devices = vec![device(api_token, "device-a", "feature-a")];
     let notification = SentNotification {
         id: "test-current-notification",
         api_tokens: &api_tokens,

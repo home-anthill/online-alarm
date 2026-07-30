@@ -2,7 +2,7 @@ use pretty_assertions::assert_eq;
 use redis::AsyncCommands;
 
 use super::db_utils::{clean_test_keys, hset_multiple, redis_connection};
-use online::db::online::find_all;
+use alarm_notifier::db::online::find_all;
 
 #[tokio::test]
 async fn find_all_reads_valid_testing_hashes_and_skips_invalid_redis_entries() {
@@ -17,6 +17,7 @@ async fn find_all_reads_valid_testing_hashes_and_skips_invalid_redis_entries() {
             ("fcmToken", "fcm-token-a"),
             ("createdAt", "1710000000001"),
             ("modifiedAt", "1710000000002"),
+            ("notificationSilenced", "true"),
         ],
     )
     .await;
@@ -69,6 +70,7 @@ async fn find_all_reads_valid_testing_hashes_and_skips_invalid_redis_entries() {
     assert_eq!("fcm-token-a", devices[0].fcm_token);
     assert_eq!(1710000000001, devices[0].created_at);
     assert_eq!(1710000000002, devices[0].modified_at);
+    assert!(!devices[0].notification_silenced, "DB 0 must not supply alarm preferences");
     assert_eq!("api-token-b", devices[1].api_token);
     assert_eq!("device-b", devices[1].device_uuid);
     assert_eq!("feature-b", devices[1].feature_uuid);

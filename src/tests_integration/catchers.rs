@@ -1,4 +1,4 @@
-use online::catchers;
+use alarm_notifier::catchers;
 use pretty_assertions::assert_eq;
 use rocket::http::{ContentType, Status};
 use rocket::local::asynchronous::Client;

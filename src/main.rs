@@ -10,14 +10,18 @@ use redis::aio::ConnectionManager;
 use rocket::{self, catchers, routes};
 use tracing::{debug, error, info, warn};
 
-use online::catchers as app_catchers;
-use online::config::{AppEnv, Env, init};
-use online::db::notification::{
+use alarm_notifier::catchers as app_catchers;
+use alarm_notifier::config::{AppEnv, Env, init};
+use alarm_notifier::db::alarm::{acknowledge_alarm_events, apply_notification_preferences, find_pending_alarms};
+use alarm_notifier::db::notification::{
     SentNotification, api_tokens_for_devices_features, get_next_notification_id, save_sent_notification,
 };
-use online::db::online::{filter_offline, filter_online, find_all};
-use online::notifications::{build_offline_by_fcm_token_map, offline_notification_body};
-use online::routes as app_routes;
+use alarm_notifier::db::online::{filter_offline, filter_online, find_all};
+use alarm_notifier::models::notification::NotificationDevice;
+use alarm_notifier::notifications::{
+    alarm_notification_body, build_alarm_batches, build_offline_by_fcm_token_map, offline_notification_body,
+};
+use alarm_notifier::routes as app_routes;
 
 #[rocket::main]
 #[allow(clippy::result_large_err)]
@@ -34,16 +38,23 @@ async fn main() -> Result<(), rocket::Error> {
     if !env.redis_username.is_empty() && env.redis_password.is_empty() {
         warn!(target: "app", "REDIS_USERNAME is set but REDIS_PASSWORD is empty — no authentication will be attempted");
     }
-    let redis_url = redis_url_with_credentials(&env.redis_uri, &env.redis_username, &env.redis_password);
+    let redis_url = redis_url_with_credentials(&env.online_redis_uri, &env.redis_username, &env.redis_password);
     let redis_client = redis::Client::open(redis_url).expect("invalid Redis URI");
     let con: ConnectionManager = redis_client.get_connection_manager().await.expect("failed to connect to Redis");
-    let notifications_redis_uri = env.notifications_redis_uri.as_deref().unwrap_or(&env.redis_uri);
+    let notifications_redis_uri =
+        env.notifications_redis_uri.clone().unwrap_or_else(|| redis_uri_for_database(&env.online_redis_uri, 1));
     let notifications_redis_url =
-        redis_url_with_credentials(notifications_redis_uri, &env.redis_username, &env.redis_password);
+        redis_url_with_credentials(&notifications_redis_uri, &env.redis_username, &env.redis_password);
     let notifications_redis_client =
         redis::Client::open(notifications_redis_url).expect("invalid notifications Redis URI");
     let notifications_con: ConnectionManager =
         notifications_redis_client.get_connection_manager().await.expect("failed to connect to notifications Redis");
+    let alarms_redis_uri =
+        env.alarms_redis_uri.clone().unwrap_or_else(|| redis_uri_for_database(&env.online_redis_uri, 3));
+    let alarms_redis_url = redis_url_with_credentials(&alarms_redis_uri, &env.redis_username, &env.redis_password);
+    let alarms_redis_client = redis::Client::open(alarms_redis_url).expect("invalid alarms Redis URI");
+    let alarms_con: ConnectionManager =
+        alarms_redis_client.get_connection_manager().await.expect("failed to connect to alarms Redis");
 
     // 3. Init Firebase client
     // To download the service account file, follow this procedure:
@@ -90,7 +101,7 @@ async fn main() -> Result<(), rocket::Error> {
         loop {
             // read all online device features hash tables from Redis with key format 'online_<deviceUuid>_feature_<featureUuid>'
             // TODO this is bad, because I have to improve logic to clean old devices from redis and so on
-            let all_devices_features = match find_all(&con, is_testing).await {
+            let mut all_devices_features = match find_all(&con, is_testing).await {
                 Ok(device_feature) => device_feature,
                 Err(err) => {
                     error!(target: "app", "cannot find all elements in db, err = {:?}", err);
@@ -98,6 +109,11 @@ async fn main() -> Result<(), rocket::Error> {
                     continue;
                 }
             };
+            if let Err(err) = apply_notification_preferences(&alarms_con, &mut all_devices_features, is_testing).await {
+                error!(target: "app", "cannot read alarm notification preferences, err = {:?}", err);
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                continue;
+            }
             // offline_devices_features are all devices features that are offline and NOT silenced
             let offline_devices_features = filter_offline(&all_devices_features, offline_timeout_seconds);
             // online_devices_features are all devices features that are not in the offline list above
@@ -156,7 +172,8 @@ async fn main() -> Result<(), rocket::Error> {
                     Ok((_resp, msg)) => {
                         debug!(target: "app", "FCM response = {:?}", &msg);
                         let notification_id = get_next_notification_id(curr_date);
-                        let api_tokens = api_tokens_for_devices_features(value);
+                        let notification_devices = value.iter().map(NotificationDevice::from).collect::<Vec<_>>();
+                        let api_tokens = api_tokens_for_devices_features(&notification_devices);
 
                         // save notifications sent via FCM to Redis to create a history
                         let sent_notification = SentNotification {
@@ -165,7 +182,7 @@ async fn main() -> Result<(), rocket::Error> {
                             sent_at: curr_date,
                             title: &title,
                             body: &body,
-                            devices: value,
+                            devices: &notification_devices,
                             provider_message_id: msg.name.as_deref(),
                         };
 
@@ -183,6 +200,65 @@ async fn main() -> Result<(), rocket::Error> {
                     let key = offline.cache_key();
                     warn!(target: "app", "[CACHE] re-adding offline device key={} to cache", &key);
                     cache.insert(key, curr_date);
+                }
+            }
+
+            let pending_alarms = match find_pending_alarms(&alarms_con, &con, is_testing).await {
+                Ok(events) => events,
+                Err(err) => {
+                    error!(target: "app", "cannot read pending alarms, err = {:?}", err);
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    continue;
+                }
+            };
+            for ((fcm_token, alarm_type), events) in build_alarm_batches(pending_alarms) {
+                let event_count = events.len();
+                let title = "home anthill".to_string();
+                let body = alarm_notification_body(&alarm_type, event_count);
+                warn!(
+                    target: "app",
+                    "sending grouped message to FCM for {} alarm event(s) of type {}",
+                    event_count,
+                    alarm_type
+                );
+                let req = SendMessageRequest {
+                    message: Some(Message {
+                        token: Some(fcm_token),
+                        notification: Some(Notification {
+                            title: Some(title.clone()),
+                            body: Some(body.clone()),
+                            image: None,
+                        }),
+                        ..Default::default()
+                    }),
+                    validate_only: None,
+                };
+                let parent = format!("projects/{}", project_id);
+                match fcm_hub.projects().messages_send(req, &parent).doit().await {
+                    Ok((_resp, msg)) => {
+                        debug!(target: "app", "FCM alarm response = {:?}", &msg);
+                        let notification_id = get_next_notification_id(curr_date);
+                        let notification_devices = events.iter().map(NotificationDevice::from).collect::<Vec<_>>();
+                        let api_tokens = api_tokens_for_devices_features(&notification_devices);
+                        let sent_notification = SentNotification {
+                            id: &notification_id,
+                            api_tokens: &api_tokens,
+                            sent_at: curr_date,
+                            title: &title,
+                            body: &body,
+                            devices: &notification_devices,
+                            provider_message_id: msg.name.as_deref(),
+                        };
+                        if let Err(err) = save_sent_notification(&notifications_con, &sent_notification).await {
+                            error!(target: "app", "cannot save sent alarm notification to Redis, err = {:?}", err);
+                        }
+                        if let Err(err) = acknowledge_alarm_events(&alarms_con, &events, is_testing).await {
+                            error!(target: "app", "cannot acknowledge sent alarm events, err = {:?}", err);
+                        }
+                    }
+                    Err(err) => {
+                        error!(target: "app", "cannot send alarm message to FCM, err = {:?}", err);
+                    }
                 }
             }
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -226,6 +302,36 @@ fn redis_url_with_credentials(redis_uri: &str, redis_username: &str, redis_passw
             warn!(target: "app", "Redis URI has no recognizable scheme (missing '://'), skipping credential injection");
             redis_uri.to_string()
         }
+    }
+}
+
+fn redis_uri_for_database(redis_uri: &str, database: u8) -> String {
+    let Some(scheme_end) = redis_uri.find("://") else {
+        return redis_uri.to_string();
+    };
+    let authority_start = scheme_end + 3;
+    let query_start = redis_uri[authority_start..].find('?').map(|index| authority_start + index);
+    let path_start = redis_uri[authority_start..].find('/').map(|index| authority_start + index);
+    let end_before_query = query_start.unwrap_or(redis_uri.len());
+    let authority_end = match path_start {
+        Some(index) if index < end_before_query => index,
+        _ => end_before_query,
+    };
+    let query = query_start.map(|index| &redis_uri[index..]).unwrap_or("");
+    format!("{}{}/{}{}", &redis_uri[..authority_start], &redis_uri[authority_start..authority_end], database, query)
+}
+
+#[cfg(test)]
+mod redis_uri_tests {
+    use super::redis_uri_for_database;
+
+    #[test]
+    fn selects_dedicated_redis_database() {
+        assert_eq!(redis_uri_for_database("redis://localhost:6379/0", 3), "redis://localhost:6379/3");
+        assert_eq!(
+            redis_uri_for_database("redis://redis.example:6379?protocol=3", 1),
+            "redis://redis.example:6379/1?protocol=3"
+        );
     }
 }
 

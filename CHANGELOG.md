@@ -4,13 +4,18 @@
 
 ### Features
 
-- Grouped due offline devices by FCM token so each recipient gets a single notification for multiple offline devices.
+- Renamed the service, Cargo package/binary, Docker image, and repository references from `online-alarm` to `alarm-notifier` without changing offline detection or FCM behavior.
+- Added Redis DB 3 alarm preference and pending-event consumption without mixing alarm data into the online state or notification history.
+- Added grouped FCM notifications for motion, thermostat mode errors, and generic alarm types, acknowledging events only after successful delivery.
+- Added alarm type metadata to notification history while preserving the existing offline-history format.
+- Grouped due offline devices by FCM token, so each recipient gets a single notification for multiple offline devices.
 - Skipped offline push notifications for Redis online records with `notificationSilenced=true`.
 - Added singular/plural notification bodies so grouped alerts report the number of offline devices.
 - Persisted sent notification metadata in Redis, including affected devices, API tokens, provider message ID, and sent timestamp.
 - Added per-API-token Redis indexes for notification history lookup.
 - Added automatic 90-day retention cleanup for stored notification history and API-token indexes.
 - Added optional `NOTIFICATIONS_REDIS_URI` support for storing notification history separately from online-status data.
+- Added optional `ALARMS_REDIS_URI` support with a Redis DB 3 fallback.
 
 ### Tests
 

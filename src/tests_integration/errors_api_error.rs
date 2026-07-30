@@ -1,4 +1,4 @@
-use online::errors::api_error::{ApiError, ApiResponse};
+use alarm_notifier::errors::api_error::{ApiError, ApiResponse};
 use pretty_assertions::assert_eq;
 use rocket::http::{ContentType, Status};
 use rocket::local::asynchronous::Client;

@@ -1,4 +1,4 @@
-use online::routes::api::keep_alive;
+use alarm_notifier::routes::api::keep_alive;
 use pretty_assertions::assert_eq;
 use rocket::http::{ContentType, Status};
 use rocket::local::asynchronous::Client;

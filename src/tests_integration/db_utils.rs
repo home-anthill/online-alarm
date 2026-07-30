@@ -16,7 +16,14 @@ pub async fn redis_connection() -> redis::aio::ConnectionManager {
 pub async fn clean_test_keys(con: &mut redis::aio::ConnectionManager) {
     let mut keys = vec![];
 
-    for pattern in ["test_*", "notification:test-*", "notifications:by_api_token:test-*"] {
+    for pattern in [
+        "test_*",
+        "test-alarm:*",
+        "test-alarm-settings:*",
+        "test-alarms:*",
+        "notification:test-*",
+        "notifications:by_api_token:test-*",
+    ] {
         let iter = con.scan_match::<&str, String>(pattern).await.expect("scan test keys");
         keys.extend(iter.map(|result| result.expect("read test key")).collect::<Vec<_>>().await);
     }
@@ -25,6 +32,7 @@ pub async fn clean_test_keys(con: &mut redis::aio::ConnectionManager) {
         let _: () = con.del(keys).await.expect("delete test keys");
     }
     let _: () = con.del("online_prod-device_feature_prod-feature").await.expect("delete production fixture key");
+    let _: () = con.hdel("fcm_by_api_token", "test-api-token-alarm").await.expect("delete alarm FCM fixture");
 }
 
 pub async fn hset_multiple(con: &mut redis::aio::ConnectionManager, key: &str, items: &[(&str, &str)]) {

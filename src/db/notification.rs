@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use redis::aio::ConnectionManager;
 use serde_json::json;
 
-use crate::models::online::Online;
+use crate::models::notification::NotificationDevice;
 
 pub const NOTIFICATION_RETENTION_MILLIS: u64 = 90 * 24 * 60 * 60 * 1000; // 90 days
 
@@ -16,7 +16,7 @@ pub struct SentNotification<'a> {
     pub sent_at: u64,
     pub title: &'a str,
     pub body: &'a str,
-    pub devices: &'a [Online],
+    pub devices: &'a [NotificationDevice],
     pub provider_message_id: Option<&'a str>,
 }
 
@@ -33,7 +33,7 @@ pub fn get_notifications_by_api_token_key(api_token: &str) -> String {
     format!("notifications:by_api_token:{api_token}")
 }
 
-pub fn api_tokens_for_devices_features(devices_features: &[Online]) -> Vec<String> {
+pub fn api_tokens_for_devices_features(devices_features: &[NotificationDevice]) -> Vec<String> {
     devices_features
         .iter()
         .map(|device_feature| device_feature.api_token.clone())
@@ -146,16 +146,20 @@ async fn get_expired_notification_ids_by_api_token(
     Ok(expired_ids_by_api_token)
 }
 
-fn convert_devices_features_to_json(devices: &[Online]) -> String {
+fn convert_devices_features_to_json(devices: &[NotificationDevice]) -> String {
     let devices = devices
         .iter()
         .map(|device| {
-            json!({
+            let mut value = json!({
                 "deviceUuid": device.device_uuid,
                 "featureUuid": device.feature_uuid,
                 "createdAt": device.created_at,
                 "modifiedAt": device.modified_at,
-            })
+            });
+            if let Some(alarm_type) = &device.alarm_type {
+                value["alarmType"] = json!(alarm_type);
+            }
+            value
         })
         .collect::<Vec<_>>();
     serde_json::to_string(&devices).expect("serializing notification devices should not fail")
@@ -169,17 +173,16 @@ mod tests {
         NOTIFICATION_RETENTION_MILLIS, api_tokens_for_devices_features, convert_devices_features_to_json,
         get_next_notification_id, get_notification_key, get_notifications_by_api_token_key, retention_threshold,
     };
-    use crate::models::online::Online;
+    use crate::models::notification::NotificationDevice;
 
-    fn online(api_token: &str, device_uuid: &str, feature_uuid: &str) -> Online {
-        Online {
+    fn device(api_token: &str, device_uuid: &str, feature_uuid: &str) -> NotificationDevice {
+        NotificationDevice {
             api_token: api_token.to_string(),
             device_uuid: device_uuid.to_string(),
             feature_uuid: feature_uuid.to_string(),
-            fcm_token: "fcm-token".to_string(),
-            notification_silenced: false,
             created_at: 1,
             modified_at: 2,
+            alarm_type: None,
         }
     }
 
@@ -192,9 +195,9 @@ mod tests {
     #[test]
     fn api_tokens_for_devices_returns_unique_sorted_tokens() {
         let tokens = api_tokens_for_devices_features(&[
-            online("api-token-b", "device-b", "feature-b"),
-            online("api-token-a", "device-a", "feature-a"),
-            online("api-token-b", "device-c", "feature-c"),
+            device("api-token-b", "device-b", "feature-b"),
+            device("api-token-a", "device-a", "feature-a"),
+            device("api-token-b", "device-c", "feature-c"),
         ]);
 
         assert_eq!(vec!["api-token-a", "api-token-b"], tokens);
@@ -202,9 +205,22 @@ mod tests {
 
     #[test]
     fn devices_json_stores_device_feature_and_timestamps() {
-        let devices = convert_devices_features_to_json(&[online("api-token", "device-a", "feature-a")]);
+        let devices = convert_devices_features_to_json(&[device("api-token", "device-a", "feature-a")]);
 
         assert_eq!(r#"[{"createdAt":1,"deviceUuid":"device-a","featureUuid":"feature-a","modifiedAt":2}]"#, devices);
+    }
+
+    #[test]
+    fn devices_json_includes_alarm_type_for_alarm_history() {
+        let mut alarm = device("api-token", "device-a", "feature-a");
+        alarm.alarm_type = Some("motion".to_string());
+
+        let devices = convert_devices_features_to_json(&[alarm]);
+
+        assert_eq!(
+            r#"[{"alarmType":"motion","createdAt":1,"deviceUuid":"device-a","featureUuid":"feature-a","modifiedAt":2}]"#,
+            devices
+        );
     }
 
     #[test]

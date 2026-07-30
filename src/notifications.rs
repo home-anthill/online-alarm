@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use dashmap::DashMap;
 use tracing::{debug, warn};
 
+use crate::models::alarm::AlarmEvent;
 use crate::models::online::Online;
 
 #[derive(Debug, Clone)]
@@ -57,6 +58,25 @@ pub fn offline_notification_body(device_count: usize) -> String {
     }
 }
 
+pub fn build_alarm_batches(events: Vec<AlarmEvent>) -> BTreeMap<(String, String), Vec<AlarmEvent>> {
+    let mut batches = BTreeMap::new();
+    for event in events {
+        batches.entry((event.fcm_token.clone(), event.alarm_type.clone())).or_insert_with(Vec::new).push(event);
+    }
+    batches
+}
+
+pub fn alarm_notification_body(alarm_type: &str, event_count: usize) -> String {
+    match (alarm_type, event_count) {
+        ("motion", 1) => "Motion detected".to_string(),
+        ("motion", count) => format!("{count} motion events detected"),
+        ("thermostat-mode-error", 1) => "Thermostat mode error".to_string(),
+        ("thermostat-mode-error", count) => format!("{count} thermostat mode errors"),
+        (alarm_type, 1) => format!("Alarm: {}", alarm_type.replace('-', " ")),
+        (alarm_type, count) => format!("{count} alarms: {}", alarm_type.replace('-', " ")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -65,8 +85,11 @@ mod tests {
     use dashmap::DashMap;
     use pretty_assertions::assert_eq;
 
-    use super::{build_offline_by_fcm_token_map, offline_notification_body};
+    use super::{
+        alarm_notification_body, build_alarm_batches, build_offline_by_fcm_token_map, offline_notification_body,
+    };
     use crate::db::online::filter_offline;
+    use crate::models::alarm::AlarmEvent;
     use crate::models::online::Online;
 
     const IMPORTANT_API_TOKEN: &str = "api-token-family-rossi";
@@ -308,5 +331,37 @@ mod tests {
     fn offline_notification_body_reports_single_or_multiple_devices() {
         assert_eq!("Device feature is offline", offline_notification_body(1));
         assert_eq!("2 devices features are offline", offline_notification_body(2));
+    }
+
+    #[test]
+    fn alarm_batches_group_by_recipient_and_type() {
+        let event = |id: &str, token: &str, alarm_type: &str| AlarmEvent {
+            id: id.to_string(),
+            api_token: "api-token".to_string(),
+            device_uuid: "device".to_string(),
+            feature_uuid: "feature".to_string(),
+            alarm_type: alarm_type.to_string(),
+            payload: "{}".to_string(),
+            created_at: 1,
+            received_at: 2,
+            fcm_token: token.to_string(),
+        };
+
+        let batches = build_alarm_batches(vec![
+            event("1", "fcm-a", "motion"),
+            event("2", "fcm-a", "motion"),
+            event("3", "fcm-a", "thermostat-mode-error"),
+        ]);
+
+        assert_eq!(2, batches.len());
+        assert_eq!(2, batches[&("fcm-a".to_string(), "motion".to_string())].len());
+    }
+
+    #[test]
+    fn alarm_bodies_cover_known_and_generic_types() {
+        assert_eq!("Motion detected", alarm_notification_body("motion", 1));
+        assert_eq!("2 motion events detected", alarm_notification_body("motion", 2));
+        assert_eq!("Thermostat mode error", alarm_notification_body("thermostat-mode-error", 1));
+        assert_eq!("Alarm: smoke detected", alarm_notification_body("smoke-detected", 1));
     }
 }

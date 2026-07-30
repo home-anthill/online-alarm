@@ -65,8 +65,8 @@ WORKDIR /app
 
 # Binary only — serviceAccountKey.json and .env must be injected at runtime
 # (e.g. via Docker volume, secret, or environment variables).
-COPY --from=builder --chown=65534:65534 /app/target/release/online /app/online
+COPY --from=builder --chown=65534:65534 /app/target/release/alarm-notifier /app/alarm-notifier
 
 USER 65534
 
-ENTRYPOINT ["/app/online"]
+ENTRYPOINT ["/app/alarm-notifier"]

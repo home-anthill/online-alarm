@@ -66,8 +66,6 @@ pub async fn find_all(db: &ConnectionManager, is_testing: bool) -> Result<Vec<On
                 continue;
             }
         };
-        let notification_silenced = value.get("notificationSilenced").map(|val| val == "true").unwrap_or(false);
-
         let created_at = match get_date_field_by_name(&value, "createdAt") {
             Ok(val) => val,
             Err(_) => {
@@ -88,7 +86,10 @@ pub async fn find_all(db: &ConnectionManager, is_testing: bool) -> Result<Vec<On
             device_uuid: device_uuid.to_string(),
             feature_uuid: feature_uuid.to_string(),
             fcm_token: fcm_token.to_string(),
-            notification_silenced,
+            // Notification preferences are stored in Redis DB 3.
+            // Set the default to false here; apply_notification_preferences()
+            // loads and applies the actual value after the online records are read.
+            notification_silenced: false,
             created_at,
             modified_at,
         });
