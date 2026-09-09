@@ -21,13 +21,13 @@ panic = "abort"
 [dependencies]
 rocket = { version = "^0.5.1", features = ["uuid", "secrets", "json"] }
 tokio = { version = "^1.53.1", features = ["full"] }
-redis = { version = "^1.4.1", features = ["tokio-comp", "connection-manager", "aio", "ahash", "r2d2"] }
-futures = "^0.3.33"
+redis = { version = "^1.7.0", features = ["tokio-comp", "connection-manager", "aio", "ahash", "r2d2"] }
+futures = "^0.3.34"
 dashmap = "^6.2.1"
 google-fcm1 = { version = "^7.0.0", features = ["yup-oauth2-service-account"] }
 urlencoding = "^2.1.3"
 # error handling
-thiserror = "2.0.19"
+thiserror = "2.0.20"
 anyhow = "^1.0.104"
 # logger
 tracing = "^0.1.44"
